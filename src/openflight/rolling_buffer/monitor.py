@@ -473,6 +473,30 @@ class RollingBufferMonitor:
                             spin_confidence=processed.spin.confidence if processed.spin else None,
                             spin_quality=processed.spin.quality if processed.spin else None,
                             spin_snr=processed.spin.snr if processed.spin else None,
+                            spin_modulation_depth=(
+                                processed.spin.modulation_depth
+                                if processed.spin else None
+                            ),
+                            spin_peak_freq_hz=(
+                                processed.spin.peak_freq_hz
+                                if processed.spin else None
+                            ),
+                            spin_seam_cycles=(
+                                processed.spin.seam_cycles
+                                if processed.spin else None
+                            ),
+                            spin_at_lower_rail=(
+                                processed.spin.at_lower_rail
+                                if processed.spin else None
+                            ),
+                            spin_at_upper_rail=(
+                                processed.spin.at_upper_rail
+                                if processed.spin else None
+                            ),
+                            spin_rejection_reason=(
+                                processed.spin.rejection_reason
+                                if processed.spin else None
+                            ),
                         )
 
                         # Log accepted trigger event

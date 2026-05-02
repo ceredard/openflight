@@ -1586,3 +1586,201 @@ class TestSpinValidationGates:
         assert result.confidence >= 0.8, (
             f"Strong spin should score >= 0.8, got {result.confidence}"
         )
+
+
+# =============================================================================
+# Regression tests for "rail" failure modes observed on real driver captures
+# (session_20260501_180406_range.jsonl): all 9 shots returned exactly 2637 RPM
+# (lowest selectable bin, dominated by envelope-DC leakage) or ~12000 RPM
+# (top of seam-frequency band, dominated by bandpass-shoulder noise) despite
+# the user striking 7-irons (true spin ~5000-8000 RPM).
+# =============================================================================
+
+class TestSpinRailRejection:
+    """Spin detection must reject peaks at the boundaries of the seam
+    search range when the underlying signal is just envelope-DC leakage
+    or bandpass-shoulder noise.
+    """
+
+    def _toneless_envelope_iq(
+        self, base_speed_mph: float = 100.0,
+        envelope_depth: float = 0.015,
+        sample_rate: int = 30000, num_samples: int = 4096,
+        seed: int = 0,
+    ):
+        """I/Q with a Doppler carrier whose amplitude wanders at very low
+        frequencies (1-20 Hz) — no narrowband seam tone in the
+        [33, 200] Hz search band.
+
+        This reproduces the real-capture failure mode where envelope-DC
+        leakage produces rail-low picks (~2637 RPM) and bandpass-shoulder
+        noise produces rail-high picks (~12000 RPM). The envelope depth
+        is large enough to clear the 0.5% modulation-floor gate but the
+        spectral content is entirely outside the seam search band.
+        """
+        wavelength = 0.01243
+        speed_mps = base_speed_mph / 2.23694
+        doppler_hz = 2 * speed_mps / wavelength
+        t = np.arange(num_samples) / sample_rate
+        phase = 2 * np.pi * doppler_hz * t
+
+        rng = np.random.default_rng(seed)
+        # Heavily lowpassed Gaussian — energy concentrated below 50 Hz.
+        env_noise = rng.standard_normal(num_samples)
+        env_noise = np.convolve(env_noise, np.ones(300) / 300, mode="same")
+        env_noise = env_noise / (np.std(env_noise) + 1e-9)
+        amplitude = 200 * (1.0 + envelope_depth * env_noise)
+
+        i = (amplitude * np.cos(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        q = (amplitude * np.sin(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        return i, q
+
+    def _amplitude_modulated_iq(
+        self, base_speed_mph: float, mod_freq_hz: float,
+        modulation_depth: float = 0.05,
+        sample_rate: int = 30000, num_samples: int = 4096,
+    ):
+        """Helper that lets us drive amplitude modulation at any frequency
+        (including outside the seam search band).
+        """
+        wavelength = 0.01243
+        speed_mps = base_speed_mph / 2.23694
+        doppler_hz = 2 * speed_mps / wavelength
+        t = np.arange(num_samples) / sample_rate
+        phase = 2 * np.pi * doppler_hz * t
+        amplitude = 200 * (1.0 + modulation_depth
+                           * np.sin(2 * np.pi * mod_freq_hz * t))
+        i = (amplitude * np.cos(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        q = (amplitude * np.sin(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        return i, q
+
+    def test_lower_rail_peak_rejected_with_toneless_envelope(self):
+        """A toneless envelope must not be reported at rail-low values
+        like 2637 / 2856 / 3076 RPM — the failure mode seen on every
+        driver shot in the real capture.
+        """
+        processor = RollingBufferProcessor()
+        accepted = []
+        for seed in range(15):
+            i, q = self._toneless_envelope_iq(
+                base_speed_mph=100.0, envelope_depth=0.015, seed=seed,
+            )
+            capture = IQCapture(
+                sample_time=0.0, trigger_time=0.068,
+                i_samples=i, q_samples=q,
+            )
+            result = processor.detect_spin(
+                capture, ball_speed_mph=100.0, ball_timestamp_ms=5.0,
+            )
+            if result.spin_rpm > 0:
+                accepted.append((seed, result))
+        # No accepted detection may sit at the bottom 5 bins of the seam
+        # search range (≈ 33-50 Hz, ≈ 2000-3000 RPM) — that whole region
+        # is dominated by envelope-DC leakage on real data.
+        for seed, r in accepted:
+            assert r.spin_rpm > 3100, (
+                f"seed={seed}: lower rail not rejected, got "
+                f"{r.spin_rpm} RPM (quality={r.quality}, snr={r.snr})"
+            )
+
+    def test_upper_rail_peak_rejected_with_toneless_envelope(self):
+        """A toneless envelope must not be reported as ~12000 RPM
+        (rail-high, bandpass-shoulder bin).
+        """
+        processor = RollingBufferProcessor()
+        accepted = []
+        for seed in range(15):
+            i, q = self._toneless_envelope_iq(
+                base_speed_mph=105.0, envelope_depth=0.015, seed=seed + 100,
+            )
+            capture = IQCapture(
+                sample_time=0.0, trigger_time=0.068,
+                i_samples=i, q_samples=q,
+            )
+            result = processor.detect_spin(
+                capture, ball_speed_mph=105.0, ball_timestamp_ms=5.0,
+            )
+            if result.spin_rpm > 0:
+                accepted.append((seed, result))
+        for seed, r in accepted:
+            assert r.spin_rpm < 11500, (
+                f"seed={seed}: upper rail not rejected, got "
+                f"{r.spin_rpm} RPM (quality={r.quality}, snr={r.snr})"
+            )
+
+    def test_rail_flags_set_when_peak_near_boundary(self):
+        """SpinResult must expose `at_lower_rail` and `at_upper_rail`
+        flags so we can diagnose rail-hit failures from the JSONL.
+        """
+        processor = RollingBufferProcessor()
+        i, q = self._toneless_envelope_iq(
+            base_speed_mph=100.0, envelope_depth=0.015, seed=1,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i, q_samples=q,
+        )
+        result = processor.detect_spin(
+            capture, ball_speed_mph=100.0, ball_timestamp_ms=5.0,
+        )
+        assert hasattr(result, "at_lower_rail"), (
+            "SpinResult must expose at_lower_rail"
+        )
+        assert hasattr(result, "at_upper_rail"), (
+            "SpinResult must expose at_upper_rail"
+        )
+
+    def test_modulation_depth_exposed_in_result(self):
+        """SpinResult must report `modulation_depth` so the JSONL
+        captures the envelope quality of every detection attempt.
+        """
+        processor = RollingBufferProcessor()
+        i, q = self._amplitude_modulated_iq(
+            base_speed_mph=120.0, mod_freq_hz=100.0, modulation_depth=0.04,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i, q_samples=q,
+        )
+        result = processor.detect_spin(
+            capture, ball_speed_mph=120.0, ball_timestamp_ms=5.0,
+        )
+        assert hasattr(result, "modulation_depth"), (
+            "SpinResult must expose modulation_depth"
+        )
+        assert result.modulation_depth is not None
+        assert result.modulation_depth > 0.005, (
+            f"modulation_depth should reflect envelope variation, "
+            f"got {result.modulation_depth}"
+        )
+
+    def test_real_seam_modulation_still_passes(self):
+        """A clean 7-iron-class detection must still pass after the rail
+        guards are added.
+        """
+        processor = RollingBufferProcessor()
+        # 7-iron territory: 6500 RPM = 108 Hz seam frequency, comfortably
+        # interior to the [33, 200] Hz search band.
+        i, q = self._amplitude_modulated_iq(
+            base_speed_mph=125.0, mod_freq_hz=6500.0 / 60.0,
+            modulation_depth=0.03,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i, q_samples=q,
+        )
+        result = processor.detect_spin(
+            capture, ball_speed_mph=125.0, ball_timestamp_ms=5.0,
+        )
+        assert result.spin_rpm > 0, (
+            f"Clean 7-iron detection regressed: quality={result.quality}"
+        )
+        assert abs(result.spin_rpm - 6500) < 500, (
+            f"Expected ~6500 RPM, got {result.spin_rpm}"
+        )
+        assert result.at_lower_rail is False, (
+            "Interior peak should not flag at_lower_rail"
+        )
+        assert result.at_upper_rail is False, (
+            "Interior peak should not flag at_upper_rail"
+        )

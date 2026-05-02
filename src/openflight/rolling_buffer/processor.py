@@ -84,6 +84,21 @@ class RollingBufferProcessor:
     SPIN_SNR_MIN = 3.0               # Minimum to report
     SPIN_AUTOCORR_MIN = 0.3          # Minimum normalized correlation
     SPIN_MIN_CYCLES = 2              # Minimum seam cycles to report
+    # Rail-rejection guards. The envelope FFT has two pathological
+    # regions where the peak picker hunts for noise rather than a real
+    # seam tone:
+    #   - The lowest few bins of the valid seam range are dominated by
+    #     residual DC leakage from the envelope subtraction (the Hann
+    #     main lobe is ~2 bins wide but the leakage shoulder extends
+    #     several bins further). On real captures this produces a
+    #     pile-up at ~2637-3076 RPM. Zero the lowest N bins so they
+    #     cannot win the argmax.
+    #   - The highest 1-2 bins are the bandpass shoulder of the
+    #     prefilter. Even a moderate noise spike there reads as
+    #     ~12000 RPM. Reject the pick when the peak lands there
+    #     and SNR isn't strong enough to override.
+    SPIN_DC_LEAKAGE_BINS = 5         # Zero this many low bins of valid range
+    SPIN_UPPER_RAIL_BINS = 2         # Top N bins of valid range = "upper rail"
 
     def __init__(self, sample_rate: int = 30000):
         """Initialize processor with pre-computed window function.
@@ -486,13 +501,19 @@ class RollingBufferProcessor:
         # Check modulation depth before proceeding. Real seam modulation
         # creates 1-5% amplitude variation; quantization noise creates <0.5%.
         weak_modulation = False
+        modulation_depth: Optional[float] = None
         envelope_mean = np.mean(ball_envelope)
         envelope_std = np.std(ball_envelope)
         if envelope_mean > 0:
-            modulation_depth = envelope_std / envelope_mean
+            modulation_depth = float(envelope_std / envelope_mean)
             if modulation_depth < 0.005:
+                logger.info(
+                    "[PROCESSOR] Spin rejected: modulation depth %.4f below 0.005",
+                    modulation_depth,
+                )
                 return SpinResult.no_spin_detected(
-                    f"Modulation depth too low ({modulation_depth:.4f})"
+                    f"Modulation depth too low ({modulation_depth:.4f})",
+                    modulation_depth=modulation_depth,
                 )
 
             # Flag weak modulation — above the noise floor (0.5%) but below
@@ -503,7 +524,10 @@ class RollingBufferProcessor:
         # Remove DC and apply Hann window
         ball_envelope -= envelope_mean
         if envelope_std < 1e-6:
-            return SpinResult.no_spin_detected("Envelope variation too low")
+            return SpinResult.no_spin_detected(
+                "Envelope variation too low",
+                modulation_depth=modulation_depth,
+            )
         windowed = ball_envelope * np.hanning(len(ball_envelope))
 
         # --- Primary: FFT on envelope ---
@@ -516,19 +540,34 @@ class RollingBufferProcessor:
         # Restrict to seam frequency range
         valid_mask = (freqs >= self.SPIN_MIN_SEAM_HZ) & (freqs <= self.SPIN_MAX_SEAM_HZ)
         if not np.any(valid_mask):
-            return SpinResult.no_spin_detected("No valid seam frequencies in range")
+            return SpinResult.no_spin_detected(
+                "No valid seam frequencies in range",
+                modulation_depth=modulation_depth,
+            )
 
         valid_mag = magnitude[valid_mask]
         valid_freqs = freqs[valid_mask]
+        n_valid = len(valid_mag)
 
-        # Reject first 2 bins in the valid range (DC leakage into envelope)
-        if len(valid_mag) > 2:
-            valid_mag = valid_mag.copy()
-            valid_mag[:2] = 0
+        # Zero the lowest N bins of the valid range. The Hann main lobe
+        # is ~2 bins wide but envelope-DC leakage shoulders extend
+        # several bins further. With FFT size 8192 and SR 30 kHz, each
+        # bin is 3.66 Hz, so 5 bins ≈ 18 Hz of DC-dominated spectrum at
+        # the bottom of the seam search range. This kills the rail-low
+        # 2637/2856/3076 RPM pile-up observed on real driver captures.
+        leakage = min(self.SPIN_DC_LEAKAGE_BINS, max(0, n_valid - 1))
+        valid_mag = valid_mag.copy()
+        if leakage > 0:
+            valid_mag[:leakage] = 0
 
-        peak_idx = np.argmax(valid_mag)
-        peak_freq = valid_freqs[peak_idx]
-        peak_mag = valid_mag[peak_idx]
+        peak_idx = int(np.argmax(valid_mag))
+        peak_freq = float(valid_freqs[peak_idx])
+        peak_mag = float(valid_mag[peak_idx])
+
+        # Rail flags — set BEFORE potential autocorrelation override so
+        # we record where the envelope FFT *itself* hunted.
+        at_lower_rail = peak_idx < leakage + self.SPIN_UPPER_RAIL_BINS
+        at_upper_rail = peak_idx >= n_valid - self.SPIN_UPPER_RAIL_BINS
 
         # SNR: peak vs median noise floor in valid range
         noise_floor = np.median(valid_mag[valid_mag > 0]) if np.any(valid_mag > 0) else 1.0
@@ -543,7 +582,10 @@ class RollingBufferProcessor:
         max_rpm = self.SPIN_MAX_SEAM_HZ * 60
         if spin_rpm > max_rpm:
             return SpinResult.no_spin_detected(
-                f"Spin {spin_rpm:.0f} RPM exceeds physical maximum ({max_rpm:.0f})"
+                f"Spin {spin_rpm:.0f} RPM exceeds physical maximum ({max_rpm:.0f})",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                at_upper_rail=at_upper_rail,
             )
 
         # Check minimum cycles in window
@@ -552,10 +594,56 @@ class RollingBufferProcessor:
 
         logger.info(
             "[PROCESSOR] Spin envelope: peak=%.1f Hz (%.0f RPM), SNR=%.1f, "
-            "cycles=%.1f, window=%.0fms, samples=%d",
+            "cycles=%.1f, mod=%.4f, window=%.0fms, samples=%d, "
+            "rail_lo=%s, rail_hi=%s",
             peak_freq, spin_rpm, fft_snr, seam_cycles,
+            modulation_depth if modulation_depth is not None else float("nan"),
             window_seconds * 1000, len(ball_envelope),
+            at_lower_rail, at_upper_rail,
         )
+
+        # Reject upper-rail picks unless SNR is genuinely high. A peak
+        # at the very top of the bandpass-shoulder region almost always
+        # indicates filter-edge noise rather than a real seam tone.
+        # Allow strong-SNR exceptions because legitimate ~11000 RPM
+        # short-iron spin can land near the cap.
+        if at_upper_rail and fft_snr < self.SPIN_SNR_HIGH:
+            logger.warning(
+                "[PROCESSOR] Spin rejected: upper-rail peak at %.0f RPM "
+                "(SNR %.1f < %.1f, bandpass-shoulder noise)",
+                spin_rpm, fft_snr, self.SPIN_SNR_HIGH,
+            )
+            return SpinResult.no_spin_detected(
+                f"Upper-rail peak at {spin_rpm:.0f} RPM "
+                f"(SNR {fft_snr:.1f} below high threshold {self.SPIN_SNR_HIGH:.0f})",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_upper_rail=True,
+            )
+
+        # Lower-rail picks survive the leakage zeroing only if energy
+        # leaks just past the guard. Treat them as suspect: require
+        # modulation depth to clearly exceed the weak-modulation
+        # threshold (i.e., a real seam tone rather than envelope wander).
+        if at_lower_rail and (
+            modulation_depth is None or modulation_depth < 0.012
+        ):
+            logger.warning(
+                "[PROCESSOR] Spin rejected: lower-rail peak at %.0f RPM "
+                "(mod %.4f, envelope-DC leakage)",
+                spin_rpm,
+                modulation_depth if modulation_depth is not None else float("nan"),
+            )
+            return SpinResult.no_spin_detected(
+                f"Lower-rail peak at {spin_rpm:.0f} RPM "
+                f"(mod {modulation_depth or 0:.4f}, "
+                f"envelope-DC leakage suspected)",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_lower_rail=True,
+            )
 
         # --- Fallback: Autocorrelation for marginal FFT ---
         autocorr_confirmed = False
@@ -565,8 +653,18 @@ class RollingBufferProcessor:
             if norm[0] > 0:
                 norm = norm / norm[0]
 
+            # Match the FFT search range exactly, including the
+            # DC-leakage guard. Without this, the autocorrelation can
+            # bypass the rail rejection by recommending a lag that
+            # corresponds to a freq inside the leakage zone or at the
+            # upper rail.
+            leakage_floor_hz = (
+                self.SPIN_MIN_SEAM_HZ
+                + self.SPIN_DC_LEAKAGE_BINS * self.SAMPLE_RATE
+                / self.SPIN_ENVELOPE_FFT_SIZE
+            )
             min_lag = int(self.SAMPLE_RATE / self.SPIN_MAX_SEAM_HZ)
-            max_lag = int(self.SAMPLE_RATE / self.SPIN_MIN_SEAM_HZ)
+            max_lag = int(self.SAMPLE_RATE / leakage_floor_hz)
             max_lag = min(max_lag, len(norm) - 1)
 
             if min_lag < max_lag:
@@ -590,20 +688,76 @@ class RollingBufferProcessor:
                             spin_rpm = acorr_rpm
                             peak_freq = acorr_freq
                             autocorr_confirmed = True
+                            # Re-evaluate rail status after the
+                            # override — the autocorr peak may live in
+                            # a different region of the seam range than
+                            # the FFT peak did.
+                            new_idx = int(
+                                np.argmin(np.abs(valid_freqs - acorr_freq))
+                            )
+                            at_lower_rail = (
+                                new_idx < leakage + self.SPIN_UPPER_RAIL_BINS
+                            )
+                            at_upper_rail = (
+                                new_idx >= n_valid - self.SPIN_UPPER_RAIL_BINS
+                            )
                             logger.info(
                                 "[PROCESSOR] Spin autocorrelation override: %.0f RPM (corr=%.2f)",
                                 acorr_rpm, acorr_peak_val,
                             )
 
+        # Rails can be re-asserted by the autocorrelation override.
+        # Re-check the same rejection rules so the override path can't
+        # bypass them.
+        if at_upper_rail and fft_snr < self.SPIN_SNR_HIGH:
+            logger.warning(
+                "[PROCESSOR] Spin rejected after autocorr: upper-rail "
+                "peak at %.0f RPM (SNR %.1f)",
+                spin_rpm, fft_snr,
+            )
+            return SpinResult.no_spin_detected(
+                f"Upper-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_upper_rail=True,
+            )
+        if at_lower_rail and (
+            modulation_depth is None or modulation_depth < 0.012
+        ):
+            logger.warning(
+                "[PROCESSOR] Spin rejected after autocorr: lower-rail "
+                "peak at %.0f RPM (mod %.4f)",
+                spin_rpm,
+                modulation_depth if modulation_depth is not None else float("nan"),
+            )
+            return SpinResult.no_spin_detected(
+                f"Lower-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_lower_rail=True,
+            )
+
         # --- Quality assessment ---
         if seam_cycles < self.SPIN_MIN_CYCLES:
             return SpinResult.no_spin_detected(
-                f"Too few seam cycles ({seam_cycles:.1f}, need {self.SPIN_MIN_CYCLES})"
+                f"Too few seam cycles ({seam_cycles:.1f}, need {self.SPIN_MIN_CYCLES})",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_lower_rail=at_lower_rail,
+                at_upper_rail=at_upper_rail,
             )
 
         if fft_snr < self.SPIN_SNR_MIN and not autocorr_confirmed:
             return SpinResult.no_spin_detected(
-                f"SNR too low ({fft_snr:.1f}, need {self.SPIN_SNR_MIN})"
+                f"SNR too low ({fft_snr:.1f}, need {self.SPIN_SNR_MIN})",
+                modulation_depth=modulation_depth,
+                peak_freq_hz=peak_freq,
+                seam_cycles=seam_cycles,
+                at_lower_rail=at_lower_rail,
+                at_upper_rail=at_upper_rail,
             )
 
         if fft_snr >= self.SPIN_SNR_HIGH and seam_cycles >= 5:
@@ -637,6 +791,11 @@ class RollingBufferProcessor:
             confidence=confidence,
             snr=round(fft_snr, 2),
             quality=quality,
+            modulation_depth=modulation_depth,
+            peak_freq_hz=peak_freq,
+            seam_cycles=seam_cycles,
+            at_lower_rail=at_lower_rail,
+            at_upper_rail=at_upper_rail,
         )
 
     def find_club_speed(

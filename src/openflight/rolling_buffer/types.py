@@ -127,11 +127,31 @@ class SpinResult:
         confidence: Quality score from 0-1 (high SNR, valid range = high confidence)
         snr: Signal-to-noise ratio of the spin peak
         quality: Human-readable quality assessment
+        modulation_depth: Envelope std/mean inside the ball window. <0.005
+            usually means quantization noise; <0.01 means the FFT peak
+            may not be a real seam tone.
+        peak_freq_hz: Frequency of the picked envelope-FFT peak (Hz).
+        seam_cycles: Number of seam cycles in the analysis window
+            (peak_freq_hz × window_seconds).
+        at_lower_rail: True when the picked peak sits at or near the
+            bottom of the seam search range. Such picks are dominated
+            by envelope-DC leakage and should be treated with suspicion.
+        at_upper_rail: True when the picked peak sits at or near the
+            top of the seam search range. Such picks are typically
+            bandpass-shoulder noise rather than a real seam tone.
+        rejection_reason: Human-readable reason if the detection was
+            rejected (rail-hit, low SNR, etc.). None on a clean accept.
     """
     spin_rpm: float
     confidence: float
     snr: float
     quality: str  # "high", "medium", "low", or reason for rejection
+    modulation_depth: Optional[float] = None
+    peak_freq_hz: Optional[float] = None
+    seam_cycles: Optional[float] = None
+    at_lower_rail: bool = False
+    at_upper_rail: bool = False
+    rejection_reason: Optional[str] = None
 
     @property
     def is_reliable(self) -> bool:
@@ -139,9 +159,26 @@ class SpinResult:
         return self.confidence >= 0.6 and self.quality in ("high", "medium")
 
     @classmethod
-    def no_spin_detected(cls, reason: str = "No clear spin signal") -> "SpinResult":
-        """Factory for when spin detection fails."""
-        return cls(spin_rpm=0, confidence=0, snr=0, quality=reason)
+    def no_spin_detected(
+        cls, reason: str = "No clear spin signal",
+        modulation_depth: Optional[float] = None,
+        peak_freq_hz: Optional[float] = None,
+        seam_cycles: Optional[float] = None,
+        at_lower_rail: bool = False,
+        at_upper_rail: bool = False,
+    ) -> "SpinResult":
+        """Factory for when spin detection fails. Diagnostic fields are
+        carried through so we can see *why* it failed in the JSONL.
+        """
+        return cls(
+            spin_rpm=0, confidence=0, snr=0, quality=reason,
+            modulation_depth=modulation_depth,
+            peak_freq_hz=peak_freq_hz,
+            seam_cycles=seam_cycles,
+            at_lower_rail=at_lower_rail,
+            at_upper_rail=at_upper_rail,
+            rejection_reason=reason,
+        )
 
 
 @dataclass

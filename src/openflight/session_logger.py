@@ -598,6 +598,12 @@ class SessionLogger:
         spin_confidence: Optional[float] = None,
         spin_quality: Optional[str] = None,
         spin_snr: Optional[float] = None,
+        spin_modulation_depth: Optional[float] = None,
+        spin_peak_freq_hz: Optional[float] = None,
+        spin_seam_cycles: Optional[float] = None,
+        spin_at_lower_rail: Optional[bool] = None,
+        spin_at_upper_rail: Optional[bool] = None,
+        spin_rejection_reason: Optional[str] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -618,6 +624,16 @@ class SessionLogger:
             spin_confidence: Confidence of spin detection (0-1)
             spin_quality: Quality assessment ("high", "medium", "low")
             spin_snr: Signal-to-noise ratio of spin detection
+            spin_modulation_depth: Envelope std/mean ratio (1-5% real seam,
+                <0.5% noise floor, 0.5-1% suspicious)
+            spin_peak_freq_hz: Frequency of the picked envelope-FFT peak
+            spin_seam_cycles: Seam cycles in analysis window
+            spin_at_lower_rail: True when peak landed at the bottom of
+                the seam search range (envelope-DC leakage suspect)
+            spin_at_upper_rail: True when peak landed at the top of the
+                seam search range (bandpass-shoulder noise suspect)
+            spin_rejection_reason: Human-readable reason if spin was
+                rejected (None on a clean accept)
         """
         if not self.enabled:
             return
@@ -640,6 +656,12 @@ class SessionLogger:
             "spin_confidence": spin_confidence,
             "spin_quality": spin_quality,
             "spin_snr": spin_snr,
+            "spin_modulation_depth": spin_modulation_depth,
+            "spin_peak_freq_hz": spin_peak_freq_hz,
+            "spin_seam_cycles": spin_seam_cycles,
+            "spin_at_lower_rail": spin_at_lower_rail,
+            "spin_at_upper_rail": spin_at_upper_rail,
+            "spin_rejection_reason": spin_rejection_reason,
         })
 
     def log_error(self, error: str, context: Optional[Dict] = None):
