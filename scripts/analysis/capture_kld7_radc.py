@@ -564,6 +564,7 @@ def main():
 
     frames = []
     radc_count = 0
+    invalid_radc_count = 0
     pdat_detection_count = 0
     start_time = time.time()
 
@@ -591,6 +592,12 @@ def main():
                     now = time.time()
                     if now - start_time >= args.duration:
                         break
+
+                    if code == "RADC" and (
+                        not isinstance(payload, bytes) or len(payload) != 3072
+                    ):
+                        invalid_radc_count += 1
+                        continue
 
                     if code in seen_in_frame:
                         frames.append(current_frame)
@@ -675,6 +682,7 @@ def main():
     metadata["capture_end"] = datetime.now().isoformat()
     metadata["total_frames"] = len(frames)
     metadata["radc_frames"] = radc_count
+    metadata["invalid_radc_frames"] = invalid_radc_count
     metadata["pdat_detection_count"] = pdat_detection_count
     metadata["ops243_shot_count"] = len(ops243_shots)
     metadata["ops243_capture_count"] = len(ops243_captures)
@@ -683,6 +691,8 @@ def main():
     print()
     print("=" * 60)
     print(f"  K-LD7: {len(frames)} frames ({radc_count} with RADC)")
+    if invalid_radc_count:
+        print(f"  Invalid RADC payloads skipped: {invalid_radc_count}")
     print(f"  PDAT detections: {pdat_detection_count}")
     if ops243:
         print(f"  OPS243: {len(ops243_captures)} captures, {len(ops243_shots)} shots")

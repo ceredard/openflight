@@ -345,6 +345,25 @@ class KLD7Tracker:
                 orientation=self.orientation,
             )
             if results:
+                best_attempt = results[0]
+                weak_horizontal_wall = (
+                    self.orientation == "horizontal"
+                    and attempt_idx == 0
+                    and len(energy_attempts) > 1
+                    and abs(float(best_attempt.get("launch_angle_deg", 0.0))) >= 12.0
+                    and int(best_attempt.get("frame_count", 0)) <= 2
+                    and float(best_attempt.get("avg_snr_db", 0.0)) < 3.0
+                )
+                if weak_horizontal_wall:
+                    logger.info(
+                        "[KLD7] RADC: rejecting weak horizontal wall candidate "
+                        "(angle=%.1f°, snr=%.1f, frames=%d); retrying",
+                        best_attempt["launch_angle_deg"],
+                        best_attempt.get("avg_snr_db", 0.0),
+                        best_attempt.get("frame_count", 0),
+                    )
+                    results = []
+                    continue
                 relaxed_retry = attempt_idx > 0
                 if relaxed_retry:
                     logger.info(

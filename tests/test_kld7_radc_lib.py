@@ -16,6 +16,7 @@ try:
         compute_spectrum,
         expected_ball_bin_from_speed,
         extract_launch_angle,
+        find_impact_frames,
         parse_radc_payload,
         radc_capture_diagnostics,
         radc_frame_diagnostics,
@@ -31,6 +32,7 @@ except ImportError:
         compute_spectrum,
         expected_ball_bin_from_speed,
         extract_launch_angle,
+        find_impact_frames,
         parse_radc_payload,
         radc_capture_diagnostics,
         radc_frame_diagnostics,
@@ -1052,3 +1054,43 @@ class TestRawADCDiagnostics:
         assert summary["median_abs_speed_error_mph"] < 1.0
         assert summary["warnings_by_type"]["missing_radc"] == 1
         assert summary["peak_bin_histogram_top"][0]["bin"] == diagnostics[0].peak_bin
+
+    def test_extraction_skips_invalid_payloads(self):
+        ball_speed_mph = 70.0
+        expected_bin = expected_ball_bin_from_speed(ball_speed_mph)
+        frames = TestOpsBinSoftAnchor._impact_window(
+            center_frame=4,
+            total=12,
+            ball_frames=[
+                TestOpsBinSoftAnchor._make_frame_at_bin(
+                    peak_bin=expected_bin,
+                    angle_deg=6.0,
+                    amplitude=9000.0,
+                    seed=31,
+                ),
+                {"timestamp": 1000.28, "radc": b"\x00" * 3045},
+                TestOpsBinSoftAnchor._make_frame_at_bin(
+                    peak_bin=expected_bin,
+                    angle_deg=6.0,
+                    amplitude=9000.0,
+                    seed=32,
+                ),
+            ],
+        )
+
+        impact_indices = find_impact_frames(
+            frames,
+            ball_bands=[(expected_bin - 20, expected_bin + 21)],
+            energy_threshold=1.5,
+        )
+        results = extract_launch_angle(
+            frames,
+            ops243_ball_speed_mph=ball_speed_mph,
+            speed_tolerance_mph=5.0,
+            impact_energy_threshold=1.5,
+            orientation="horizontal",
+        )
+
+        assert impact_indices
+        assert results
+        assert results[0]["launch_angle_deg"] == pytest.approx(6.0, abs=3.0)

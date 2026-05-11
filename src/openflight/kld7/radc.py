@@ -908,8 +908,12 @@ def find_impact_frames(
         if radc is None:
             energies.append(0.0)
             continue
-        channels = parse_radc_payload(radc) if isinstance(radc, bytes) else radc
-        iq = to_complex_iq(channels["f1a_i"], channels["f1a_q"])
+        try:
+            channels = parse_radc_payload(radc) if isinstance(radc, bytes) else radc
+            iq = to_complex_iq(channels["f1a_i"], channels["f1a_q"])
+        except (KeyError, TypeError, ValueError):
+            energies.append(0.0)
+            continue
         spec = compute_spectrum(iq, fft_size=fft_size)
         # Energy in positive high-velocity bins (club swing)
         pos_energy = float(np.sum(spec[min_velocity_bin: fft_size // 2] ** 2))
@@ -1060,7 +1064,10 @@ def extract_launch_angle(
             radc_raw = frames[fi].get("radc")
             if radc_raw is None:
                 continue
-            channels = parse_radc_payload(radc_raw) if isinstance(radc_raw, bytes) else radc_raw
+            try:
+                channels = parse_radc_payload(radc_raw) if isinstance(radc_raw, bytes) else radc_raw
+            except (KeyError, TypeError, ValueError):
+                continue
 
             f1a_iq = to_complex_iq(channels["f1a_i"], channels["f1a_q"])
             f2a_iq = to_complex_iq(channels["f2a_i"], channels["f2a_q"])
