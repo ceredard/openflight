@@ -2,7 +2,7 @@
 """Capture K-LD7 raw ADC (RADC) data alongside OPS243 speed readings.
 
 Runs both radars simultaneously:
-- K-LD7: streams RADC + PDAT + TDAT at 3 Mbaud (main thread)
+- K-LD7: streams RADC at 3 Mbaud (main thread), matching production
 - OPS243: rolling buffer mode with hardware sound trigger (background thread),
   captures I/Q data on each trigger and re-arms for the next shot
 
@@ -11,16 +11,16 @@ The OPS243 ball speed anchors the K-LD7 velocity search for offline analysis.
 Usage:
     # K-LD7 horizontal, picked via udev symlink (preferred on the Pi).
     # Same for --orientation vertical.
-    ./scripts/capture_kld7_radc.py --orientation horizontal --duration 60
+    ./scripts/analysis/capture_kld7_radc.py --orientation horizontal --duration 60
 
     # K-LD7 only, explicit port
-    ./scripts/capture_kld7_radc.py --port /dev/ttyUSB0 --duration 60
+    ./scripts/analysis/capture_kld7_radc.py --port /dev/ttyUSB0 --duration 60
 
     # Both radars, OPS243 auto-detected
-    ./scripts/capture_kld7_radc.py --orientation horizontal --ops243 --duration 60
+    ./scripts/analysis/capture_kld7_radc.py --orientation horizontal --ops243 --duration 60
 
     # Both radars, OPS243 port specified explicitly
-    ./scripts/capture_kld7_radc.py --port /dev/ttyUSB0 --ops243-port /dev/ttyACM0 --duration 60
+    ./scripts/analysis/capture_kld7_radc.py --port /dev/ttyUSB0 --ops243-port /dev/ttyACM0 --duration 60
 
 K-LD7 port selection:
     1. --port <path>        explicit override
@@ -30,7 +30,7 @@ K-LD7 port selection:
                             a warning is printed in this case.
 
 Output:
-    .pkl file with RADC + PDAT + TDAT frames, OPS243 shots, and metadata.
+    .pkl file with RADC frames, OPS243 shots, and metadata.
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ except ImportError:
     print("kld7 package not installed. Run: pip install kld7")
     sys.exit(1)
 
-# Add src to path for OPS243 import
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Add src to path for OPS243 import. This script lives in scripts/analysis.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
@@ -192,8 +192,17 @@ class OPS243RollingBufferReader:
     def stop(self):
         self._running = False
         if self._thread:
-            self._thread.join(timeout=5.0)
+            # A hardware-triggered OPS dump can take ~7s at 57,600 baud.
+            # Give the reader enough time to finish parsing/re-arming before
+            # closing the port.
+            self._thread.join(timeout=12.0)
+            if self._thread.is_alive():
+                print("\n  [OPS243] Warning: reader did not stop cleanly; forcing close")
         if self.radar:
+            try:
+                self.radar.rearm_rolling_buffer(self.PRE_TRIGGER_SEGMENTS)
+            except Exception as e:
+                print(f"\n  [OPS243] Final re-arm skipped: {e}")
             try:
                 self.radar.disconnect()
             except Exception:
@@ -253,6 +262,12 @@ class OPS243RollingBufferReader:
 
             except Exception as e:
                 print(f"\n  [OPS243] Error: {e}")
+                try:
+                    if self.radar:
+                        self.radar.rearm_rolling_buffer(self.PRE_TRIGGER_SEGMENTS)
+                        print("  [OPS243] Re-armed after reader error")
+                except Exception as rearm_error:
+                    print(f"  [OPS243] Re-arm after error failed: {rearm_error}")
                 time.sleep(0.1)
 
     def get_shots(self):
@@ -276,10 +291,14 @@ def _baseline_clutter_report(frames: list, fft_size: int = 2048,
     """
     try:
         import numpy as np
+
         # Reuse the project FFT path so the same DC mask is applied.
         from openflight.kld7.radc import (
-            DC_MASK_BINS, bin_to_velocity_kmh, compute_spectrum,
-            parse_radc_payload, to_complex_iq,
+            DC_MASK_BINS,
+            bin_to_velocity_kmh,
+            compute_spectrum,
+            parse_radc_payload,
+            to_complex_iq,
         )
     except ImportError as e:
         print(f"  (baseline analysis unavailable: {e})")
@@ -360,6 +379,13 @@ def main():
     parser.add_argument("--port", default=None, help="K-LD7 serial port (auto-detect if not set)")
     parser.add_argument("--baud", type=int, default=3000000, help="K-LD7 baud rate (default: 3000000)")
     parser.add_argument("--orientation", default="vertical", choices=["vertical", "horizontal"])
+    parser.add_argument(
+        "--include-targets",
+        action="store_true",
+        help="Also request K-LD7 PDAT/TDAT target frames. Off by default "
+        "because production streams RADC only and combined frame streaming "
+        "is more prone to serial timeouts.",
+    )
 
     # OPS243 args
     parser.add_argument("--ops243", action="store_true",
@@ -432,7 +458,7 @@ def main():
     if args.output:
         output_path = Path(args.output).expanduser().resolve()
     else:
-        output_dir = Path(__file__).resolve().parent.parent / "session_logs"
+        output_dir = PROJECT_ROOT / "session_logs"
         output_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = f"-{args.club}" if args.club else ""
@@ -473,6 +499,7 @@ def main():
     print(f"  Duration:    {args.duration}s")
     print(f"  Orientation: {args.orientation}")
     print(f"  Output:      {output_path}")
+    print(f"  Targets:     {'PDAT/TDAT included' if args.include_targets else 'disabled (RADC only)'}")
     print()
 
     # Connect K-LD7
@@ -508,8 +535,14 @@ def main():
         ops243.start()
         print("  OPS243 speed reader started")
 
-    # Stream K-LD7 RADC + PDAT + TDAT
-    frame_codes = FrameCode.RADC | FrameCode.PDAT | FrameCode.TDAT
+    # Stream K-LD7 RADC. Production uses RADC only; requesting PDAT/TDAT
+    # concurrently has proven more fragile on the Pi/FTDI path and can
+    # timeout after only a couple frames.
+    frame_codes = FrameCode.RADC
+    stream_label = "RADC"
+    if args.include_targets:
+        frame_codes = frame_codes | FrameCode.PDAT | FrameCode.TDAT
+        stream_label = "RADC + PDAT + TDAT"
 
     metadata = {
         "module": "K-LD7",
@@ -525,10 +558,11 @@ def main():
         "club": args.club,
         "expected_shots": args.shots,
         "notes": args.notes,
+        "include_targets": args.include_targets,
+        "frame_codes": stream_label,
     }
 
     frames = []
-    frame_count = 0
     radc_count = 0
     pdat_detection_count = 0
     start_time = time.time()
@@ -539,59 +573,90 @@ def main():
         print("Stand still; do not swing. We're looking for persistent peaks")
         print("from static or repetitively-moving clutter sources.")
     else:
-        print(f"Streaming RADC + PDAT + TDAT for {args.duration}s (Ctrl+C to stop)")
+        print(f"Streaming {stream_label} for {args.duration}s (Ctrl+C to stop)")
         if ops243:
             print("OPS243 rolling buffer armed, waiting for sound triggers")
     print("-" * 60)
 
+    current_frame = {"timestamp": time.time()}
+    seen_in_frame = set()
+    last_status_time = 0.0
+    stream_errors = 0
+    max_stream_errors = 10
+
     try:
-        current_frame = {"timestamp": time.time()}
-        seen_in_frame = set()
+        while time.time() - start_time < args.duration and stream_errors < max_stream_errors:
+            try:
+                for code, payload in kld7.stream_frames(frame_codes, max_count=-1):
+                    now = time.time()
+                    if now - start_time >= args.duration:
+                        break
 
-        for code, payload in kld7.stream_frames(frame_codes, max_count=-1):
-            if time.time() - start_time >= args.duration:
-                break
+                    if code in seen_in_frame:
+                        frames.append(current_frame)
+                        current_frame = {"timestamp": now}
+                        seen_in_frame = set()
 
-            if code in seen_in_frame:
-                frames.append(current_frame)
-                current_frame = {"timestamp": time.time()}
-                seen_in_frame = set()
+                    seen_in_frame.add(code)
 
-            seen_in_frame.add(code)
+                    if code == "RADC":
+                        current_frame["radc"] = payload
+                        radc_count += 1
+                        stream_errors = 0
 
-            if code == "RADC":
-                current_frame["radc"] = payload
-                radc_count += 1
+                    elif code == "TDAT":
+                        current_frame["tdat"] = target_to_dict(payload)
+                        stream_errors = 0
 
-            elif code == "TDAT":
-                current_frame["tdat"] = target_to_dict(payload)
-                frame_count += 1
-                elapsed = time.time() - start_time
-                fps = frame_count / elapsed if elapsed > 0 else 0
-                n_captures = len(ops243.get_captures()) if ops243 else 0
-                n_shots = len(ops243.get_shots()) if ops243 else 0
+                    elif code == "PDAT":
+                        current_frame["pdat"] = [target_to_dict(t) for t in payload] if payload else []
+                        pdat_detection_count += sum(1 for _ in (payload or []))
+                        stream_errors = 0
+
+                    if now - last_status_time >= 0.25:
+                        frame_count = len(frames) + (1 if seen_in_frame else 0)
+                        elapsed = now - start_time
+                        fps = frame_count / elapsed if elapsed > 0 else 0
+                        n_captures = len(ops243.get_captures()) if ops243 else 0
+                        n_shots = len(ops243.get_shots()) if ops243 else 0
+                        print(
+                            f"\r  Frames: {frame_count}  RADC: {radc_count}  "
+                            f"PDAT: {pdat_detection_count}  "
+                            f"FPS: {fps:.1f}  "
+                            f"{'OPS: ' + str(n_captures) + ' cap/' + str(n_shots) + ' shots  ' if ops243 else ''}"
+                            f"Elapsed: {elapsed:.0f}s",
+                            end="",
+                            flush=True,
+                        )
+                        last_status_time = now
+
+                if time.time() - start_time >= args.duration:
+                    break
+
+                stream_errors += 1
                 print(
-                    f"\r  Frames: {frame_count}  RADC: {radc_count}  "
-                    f"PDAT: {pdat_detection_count}  "
-                    f"FPS: {fps:.1f}  "
-                    f"{'OPS: ' + str(n_captures) + ' cap/' + str(n_shots) + ' shots  ' if ops243 else ''}"
-                    f"Elapsed: {elapsed:.0f}s",
-                    end="",
-                    flush=True,
+                    f"\nK-LD7 stream ended unexpectedly "
+                    f"({stream_errors}/{max_stream_errors}); retrying..."
                 )
+                time.sleep(0.1)
 
-            elif code == "PDAT":
-                current_frame["pdat"] = [target_to_dict(t) for t in payload] if payload else []
-                pdat_detection_count += sum(1 for _ in (payload or []))
+            except KLD7Exception as e:
+                stream_errors += 1
+                print(f"\nK-LD7 stream error {stream_errors}/{max_stream_errors}: {e}")
+                try:
+                    kld7._drain_serial()
+                except Exception:
+                    pass
+                time.sleep(0.1)
 
-        if seen_in_frame:
-            frames.append(current_frame)
+        if stream_errors >= max_stream_errors:
+            print(f"\nK-LD7 stream gave up after {max_stream_errors} consecutive errors")
 
     except KeyboardInterrupt:
         pass
-    except KLD7Exception as e:
-        print(f"\nK-LD7 error: {e}")
     finally:
+        if seen_in_frame:
+            frames.append(current_frame)
         try:
             kld7.close()
         except Exception:
