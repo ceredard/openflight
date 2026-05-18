@@ -25,6 +25,13 @@ DC_MASK_BINS = 8  # Zero out bins near DC to suppress residual leakage
 # shape without picking up noise elsewhere in the ball band.
 CENTROID_SEARCH_BINS = 16
 
+# Minimum linear SNR for accepting the OPS-expected-bin local peak over the
+# strongest in-band peak. This must be higher than the per-frame detection
+# floor because Hann-window side-lobes from a strong off-anchor target can
+# exceed 2x the full-spectrum median and otherwise masquerade as a valid
+# anchored ball return.
+OPS_ANCHORED_PEAK_MIN_SNR = 5.0
+
 # Broad default ball band used when no OPS243 ball speed is available.
 # At RSPI=3 the K-LD7's unambiguous velocity span is +/-100 km/h, so
 # typical golf ball speeds alias into this negative-velocity window.
@@ -1129,7 +1136,7 @@ def extract_launch_angle(
                     fft_size,
                 )
                 anchored_snr = peak_val / full_median if full_median > 0 else 0.0
-                if peak_bin is None or anchored_snr < 2.0:
+                if peak_bin is None or anchored_snr < OPS_ANCHORED_PEAK_MIN_SNR:
                     if orientation == "horizontal":
                         continue
                     peak_bin, peak_val, peak_band = _find_peak_in_bands(
