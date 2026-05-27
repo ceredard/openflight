@@ -287,6 +287,99 @@ def radar_launch_is_plausible(
     }
 
 
+def _vertical_soft_launch_lane_deg(club: ClubType) -> tuple[float, float]:
+    """Return broad club-family lanes for low-confidence vertical radar candidates."""
+    if club == ClubType.DRIVER:
+        return (4.0, 22.0)
+    if club in {ClubType.WOOD_3, ClubType.WOOD_5, ClubType.WOOD_7}:
+        return (5.0, 24.0)
+    if club in {ClubType.HYBRID_3, ClubType.HYBRID_5, ClubType.HYBRID_7, ClubType.HYBRID_9}:
+        return (6.0, 26.0)
+    if club in {ClubType.IRON_2, ClubType.IRON_3, ClubType.IRON_4, ClubType.IRON_5}:
+        return (5.0, 25.0)
+    if club in {ClubType.IRON_6, ClubType.IRON_7, ClubType.IRON_8, ClubType.IRON_9}:
+        return (7.0, 28.0)
+    if club in {ClubType.PW, ClubType.GW, ClubType.SW, ClubType.LW}:
+        return (10.0, 45.0)
+    return (5.0, 35.0)
+
+
+def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
+    """Decide whether a vertical K-LD7 candidate should set the shot launch angle.
+
+    High-confidence candidates keep the existing production behavior. Marginal
+    candidates get a stricter second pass: they must agree with the launch
+    estimator, sit inside a club-family lane, and avoid very long frame spans
+    that often indicate clutter rather than the ball transit.
+    """
+    details = {
+        "accepted": False,
+        "selection_reason": "no_candidate",
+        "acceptance_path": None,
+        "strict_min_confidence": _MIN_VERTICAL_RADAR_CONFIDENCE,
+        "soft_min_confidence": _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE,
+        "soft_allowed_delta_deg": _VERTICAL_SOFT_ESTIMATE_DELTA_DEG,
+        "soft_max_frame_count": _VERTICAL_SOFT_MAX_FRAME_COUNT,
+    }
+    if not kld7_angle or kld7_angle.vertical_deg is None:
+        return False, details
+
+    radar_angle_deg = kld7_angle.vertical_deg
+    plausible, guard_details = radar_launch_is_plausible(
+        radar_angle_deg=radar_angle_deg,
+        club=shot.club,
+        ball_speed_mph=shot.ball_speed_mph,
+        club_speed_mph=shot.club_speed_mph,
+        spin_rpm=shot.spin_rpm,
+    )
+    details.update(guard_details)
+    if not plausible:
+        details["selection_reason"] = "implausible_launch"
+        return False, details
+
+    if kld7_angle.confidence >= _MIN_VERTICAL_RADAR_CONFIDENCE:
+        details["accepted"] = True
+        details["selection_reason"] = "strict_accept"
+        details["acceptance_path"] = "strict"
+        return True, details
+
+    if kld7_angle.confidence < _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE:
+        details["selection_reason"] = "low_confidence"
+        return False, details
+
+    if guard_details.get("skipped"):
+        details["selection_reason"] = "soft_guard_unavailable"
+        return False, details
+
+    lane_min, lane_max = _vertical_soft_launch_lane_deg(shot.club)
+    details["soft_lane_min_deg"] = lane_min
+    details["soft_lane_max_deg"] = lane_max
+    if not (lane_min <= radar_angle_deg <= lane_max):
+        details["selection_reason"] = "outside_soft_lane"
+        return False, details
+
+    delta_deg = guard_details.get("delta_deg")
+    if delta_deg is None or delta_deg > _VERTICAL_SOFT_ESTIMATE_DELTA_DEG:
+        details["selection_reason"] = "estimator_delta_too_large"
+        return False, details
+
+    if kld7_angle.num_frames <= 0:
+        details["selection_reason"] = "no_candidate_frames"
+        return False, details
+
+    if (
+        kld7_angle.num_frames > _VERTICAL_SOFT_MAX_FRAME_COUNT
+        and delta_deg > _VERTICAL_SOFT_TIGHT_DELTA_FOR_LONG_FRAME_DEG
+    ):
+        details["selection_reason"] = "suspicious_frame_span"
+        return False, details
+
+    details["accepted"] = True
+    details["selection_reason"] = "soft_accept"
+    details["acceptance_path"] = "soft"
+    return True, details
+
+
 def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     """Guarantee emitted shots have launch angles without overwriting measurements."""
     estimated: tuple[float, float] | None = None
@@ -344,6 +437,10 @@ _KLD7_BUFFER_SECONDS = 6.0
 _KLD7_BUFFER_UNDERFILL_FRAC = 0.5
 _KLD7_POST_SHOT_CAPTURE_DELAY_S = 0.18
 _MIN_VERTICAL_RADAR_CONFIDENCE = 0.80
+_MIN_VERTICAL_SOFT_RADAR_CONFIDENCE = 0.70
+_VERTICAL_SOFT_ESTIMATE_DELTA_DEG = 4.5
+_VERTICAL_SOFT_MAX_FRAME_COUNT = 40
+_VERTICAL_SOFT_TIGHT_DELTA_FOR_LONG_FRAME_DEG = 2.0
 _MIN_HORIZONTAL_RADAR_CONFIDENCE = 0.40
 
 
@@ -470,6 +567,7 @@ def _kld7_angle_log_payload(
     axis_field: str,
     raw_angle_deg: Optional[float] = None,
     calibration_details: Optional[dict] = None,
+    selection_details: Optional[dict] = None,
 ) -> Optional[dict]:
     """Build the compact K-LD7 angle payload used in session logs."""
     if angle is None:
@@ -495,6 +593,8 @@ def _kld7_angle_log_payload(
         payload["calibration_model"] = CALIBRATION_MODEL_NAME
         if calibration_details:
             payload["calibration_details"] = calibration_details
+    if selection_details:
+        payload.update(selection_details)
     return payload
 
 
@@ -1404,6 +1504,7 @@ def on_shot_detected(shot: Shot):
                     else None
                 )
                 vertical_calibration_details = None
+                vertical_selection_details = None
                 if kld7_angle and kld7_angle.vertical_deg is not None:
                     (
                         kld7_angle.vertical_deg,
@@ -1415,27 +1516,19 @@ def on_shot_detected(shot: Shot):
                         ball_speed_mph=shot.ball_speed_mph,
                         club_speed_mph=shot.club_speed_mph,
                     )
-                    accepted, guard_details = radar_launch_is_plausible(
-                        radar_angle_deg=kld7_angle.vertical_deg,
-                        club=shot.club,
-                        ball_speed_mph=shot.ball_speed_mph,
-                        club_speed_mph=shot.club_speed_mph,
-                        spin_rpm=shot.spin_rpm,
+                    accepted, vertical_selection_details = _select_vertical_radar_launch(
+                        kld7_angle, shot
                     )
+                    selection_reason = vertical_selection_details["selection_reason"]
                     if not accepted:
                         logger.warning(
-                            "[SERVER] Vertical angle %.1f° rejected: expected %.1f° ± %.1f°",
+                            "[SERVER] Vertical angle %.1f° rejected: %s "
+                            "(expected=%s°, delta=%s°, conf=%.0f%%)",
                             kld7_angle.vertical_deg,
-                            guard_details["expected_launch_deg"],
-                            guard_details["allowed_delta_deg"],
-                        )
-                    elif kld7_angle.confidence < _MIN_VERTICAL_RADAR_CONFIDENCE:
-                        logger.warning(
-                            "[SERVER] Vertical angle %.1f° rejected: low confidence %.0f%% "
-                            "(need %.0f%%)",
-                            kld7_angle.vertical_deg,
+                            selection_reason,
+                            vertical_selection_details.get("expected_launch_deg"),
+                            vertical_selection_details.get("delta_deg"),
                             kld7_angle.confidence * 100,
-                            _MIN_VERTICAL_RADAR_CONFIDENCE * 100,
                         )
                     else:
                         shot.launch_angle_vertical = kld7_angle.vertical_deg
@@ -1444,10 +1537,11 @@ def on_shot_detected(shot: Shot):
                         shot.launch_angle_vertical_source = "radar"
                         shot.angle_source = "radar"
                         logger.info(
-                            "[SERVER] Vertical angle: %.1f° (conf=%.0f%%, %d frames)",
+                            "[SERVER] Vertical angle: %.1f° (conf=%.0f%%, %d frames, %s)",
                             kld7_angle.vertical_deg,
                             kld7_angle.confidence * 100,
                             kld7_angle.num_frames,
+                            selection_reason,
                         )
                 # Club angle of attack (same RADC buffer, club speed from OPS).
                 # Compute BEFORE logging the buffer so the log entry can
@@ -1488,6 +1582,7 @@ def on_shot_detected(shot: Shot):
                             "vertical_deg",
                             raw_angle_deg=raw_vertical_angle_deg,
                             calibration_details=vertical_calibration_details,
+                            selection_details=vertical_selection_details,
                         ),
                         club_angle=_kld7_angle_log_payload(club_angle_v, "vertical_deg"),
                         raw_payload_expected=raw_payload_expected,
