@@ -433,6 +433,8 @@ def _select_horizontal_radar_launch(kld7_angle, horizontal_limit: float) -> tupl
         "soft_min_confidence": _MIN_HORIZONTAL_SOFT_RADAR_CONFIDENCE,
         "soft_angle_limit_deg": soft_limit,
         "soft_max_frame_count": _HORIZONTAL_SOFT_MAX_FRAME_COUNT,
+        "near_limit_min_confidence": _HORIZONTAL_NEAR_LIMIT_MIN_CONFIDENCE,
+        "near_limit_max_frame_count": _HORIZONTAL_NEAR_LIMIT_MAX_FRAMES,
     }
     if not kld7_angle or kld7_angle.horizontal_deg is None:
         return False, details
@@ -440,6 +442,16 @@ def _select_horizontal_radar_launch(kld7_angle, horizontal_limit: float) -> tupl
     abs_angle = abs(kld7_angle.horizontal_deg)
     if abs_angle > horizontal_limit:
         details["selection_reason"] = "outside_horizontal_limit"
+        return False, details
+
+    near_limit_angle = horizontal_limit * _HORIZONTAL_NEAR_LIMIT_FRACTION
+    if (
+        abs_angle >= near_limit_angle
+        and kld7_angle.num_frames <= _HORIZONTAL_NEAR_LIMIT_MAX_FRAMES
+        and kld7_angle.confidence < _HORIZONTAL_NEAR_LIMIT_MIN_CONFIDENCE
+    ):
+        details["selection_reason"] = "weak_near_limit"
+        details["near_limit_angle_deg"] = round(near_limit_angle, 1)
         return False, details
 
     if kld7_angle.confidence >= _MIN_HORIZONTAL_RADAR_CONFIDENCE:
@@ -535,6 +547,9 @@ _MIN_HORIZONTAL_RADAR_CONFIDENCE = 0.40
 _MIN_HORIZONTAL_SOFT_RADAR_CONFIDENCE = 0.30
 _HORIZONTAL_SOFT_ANGLE_LIMIT_DEG = 5.0
 _HORIZONTAL_SOFT_MAX_FRAME_COUNT = 40
+_HORIZONTAL_NEAR_LIMIT_FRACTION = 0.80
+_HORIZONTAL_NEAR_LIMIT_MAX_FRAMES = 2
+_HORIZONTAL_NEAR_LIMIT_MIN_CONFIDENCE = 0.80
 
 
 def _maybe_wait_for_kld7_post_shot_frames(shot_timestamp: float) -> None:
