@@ -417,7 +417,7 @@ class TestKLD7TrackerRingBuffer:
 
         tracker._stream_loop()
 
-        assert radar.min_frame_interval == pytest.approx(0.04)
+        assert radar.min_frame_interval == pytest.approx(0.05)
 
     def test_stream_loop_reconnects_after_consecutive_timeouts(self, monkeypatch):
         """Repeated command timeouts should trigger a full K-LD7 reconnect."""

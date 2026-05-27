@@ -82,7 +82,7 @@ class KLD7Tracker:
     radc_horizontal_impact_energy_threshold = 1.85
     radc_horizontal_retry_impact_energy_threshold = 0.5
     radc_horizontal_angle_limit_deg = 15.0
-    radc_stream_min_interval_s = 0.04
+    radc_stream_min_interval_s = 0.05
 
     def __init__(
         self,
@@ -102,7 +102,7 @@ class KLD7Tracker:
         radc_horizontal_impact_energy_threshold: float = 1.85,
         radc_horizontal_retry_impact_energy_threshold: float = 0.5,
         radc_horizontal_angle_limit_deg: float = 15.0,
-        radc_stream_min_interval_s: float = 0.04,
+        radc_stream_min_interval_s: float = 0.05,
     ):
         self.port = port
         self.range_m = range_m
@@ -304,7 +304,11 @@ class KLD7Tracker:
         last_health_t = time.time()
         last_health_count = 0
 
-        logger.info("[KLD7] Stream started: RADC only (3Mbaud, %s)", self.orientation)
+        logger.info(
+            "[KLD7] Stream started: RADC only (3Mbaud, %.1f Hz target, %s)",
+            1.0 / max(self.radc_stream_min_interval_s, 0.001),
+            self.orientation,
+        )
 
         # Note: the robust _read_packet patch is applied during connect()
         # via serial_io.connect_with_recovery, so we don't need to
