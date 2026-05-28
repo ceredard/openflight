@@ -1618,7 +1618,7 @@ def extract_launch_angle(
                         worst = int(np.argmin(snrs))
                     else:
                         med = float(np.median(angs))
-                    worst = int(np.argmax(np.abs(angs - med)))
+                        worst = int(np.argmax(np.abs(angs - med)))
                     clean_mask[worst] = False
                 clean_angs = angs[clean_mask]
                 clean_snrs = snrs[clean_mask]
