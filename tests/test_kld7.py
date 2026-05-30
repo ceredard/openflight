@@ -1047,6 +1047,120 @@ class TestRADCAngleExtraction:
 
         assert [frame.frame_index for frame in selected] == [10, 11]
 
+    def test_vertical_rules_can_pair_primary_anchor_with_early_ops_matched_neighbor(self):
+        """The selection ladder can use a 5-20ms OPS-matched frame as context."""
+        from openflight.kld7.radc import (
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        early_previous = _VerticalFrameCandidate(
+            frame_index=9,
+            peak_bin=1938,
+            bin_error=5,
+            snr_linear=6.0,
+            angle_deg=2.0,
+            speed_mph=117.0,
+            raw_angle_deg=2.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.012,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+        anchor = _VerticalFrameCandidate(
+            frame_index=10,
+            peak_bin=1935,
+            bin_error=2,
+            snr_linear=10.0,
+            angle_deg=7.0,
+            speed_mph=117.0,
+            raw_angle_deg=7.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.038,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+
+        selected = _select_vertical_candidates_with_rules([early_previous, anchor])
+
+        assert [frame.frame_index for frame in selected] == [9, 10]
+
+    def test_vertical_rules_prefer_primary_pair_over_early_context_pair(self):
+        """Primary 20-100ms pairs win before trying the 5-20ms context tier."""
+        from openflight.kld7.radc import (
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        early_previous = _VerticalFrameCandidate(
+            frame_index=9,
+            peak_bin=1938,
+            bin_error=5,
+            snr_linear=6.0,
+            angle_deg=2.0,
+            speed_mph=117.0,
+            raw_angle_deg=2.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.012,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+        anchor = _VerticalFrameCandidate(
+            frame_index=10,
+            peak_bin=1935,
+            bin_error=2,
+            snr_linear=10.0,
+            angle_deg=7.0,
+            speed_mph=117.0,
+            raw_angle_deg=7.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.038,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+        primary_next = _VerticalFrameCandidate(
+            frame_index=11,
+            peak_bin=1932,
+            bin_error=5,
+            snr_linear=8.0,
+            angle_deg=11.0,
+            speed_mph=117.0,
+            raw_angle_deg=11.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.071,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+
+        selected = _select_vertical_candidates_with_rules(
+            [early_previous, anchor, primary_next]
+        )
+
+        assert [frame.frame_index for frame in selected] == [10, 11]
+
+    def test_vertical_rules_do_not_anchor_on_early_frame_alone(self):
+        """An early OPS-bin match needs a primary-window anchor to avoid club picks."""
+        from openflight.kld7.radc import (
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        early_only = _VerticalFrameCandidate(
+            frame_index=9,
+            peak_bin=1938,
+            bin_error=5,
+            snr_linear=12.0,
+            angle_deg=2.0,
+            speed_mph=117.0,
+            raw_angle_deg=2.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.012,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+
+        assert _select_vertical_candidates_with_rules([early_only]) == []
+
     def test_vertical_rules_require_strong_anchor_for_weak_adjacent_frames(self):
         """Weak OPS-bin frames alone are not enough to start a geometry fit."""
         from openflight.kld7.radc import (

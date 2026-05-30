@@ -52,14 +52,73 @@ from kld7_radc_lib import (
 )
 
 
-def test_select_best_shot_result_prefers_latest_impact_group():
+def test_select_best_shot_result_prefers_geometry_over_later_naive_group():
     results = [
-        {"launch_angle_deg": 4.0, "impact_frames": [2, 3]},
-        {"launch_angle_deg": 12.0, "impact_frames": [40, 42]},
-        {"launch_angle_deg": 8.0, "impact_frames": [20]},
+        {
+            "launch_angle_deg": 22.9,
+            "impact_frames": [38, 40],
+            "estimator": "geometry",
+            "frame_count": 2,
+            "confidence": 0.90,
+            "selection_path": "geometry_primary",
+        },
+        {
+            "launch_angle_deg": 10.6,
+            "impact_frames": [44, 48],
+            "estimator": "naive",
+            "frame_count": 4,
+            "confidence": 0.93,
+            "selection_path": "legacy_naive_suspect",
+        },
     ]
 
-    assert select_best_shot_result(results)["launch_angle_deg"] == 12.0
+    assert select_best_shot_result(results)["launch_angle_deg"] == 22.9
+
+
+def test_select_best_shot_result_prefers_single_frame_geometry_over_later_naive_group():
+    results = [
+        {
+            "launch_angle_deg": 17.1,
+            "impact_frames": [39, 40],
+            "estimator": "geometry_single_frame",
+            "frame_count": 1,
+            "confidence": 0.72,
+            "selection_path": "geometry_single_frame",
+        },
+        {
+            "launch_angle_deg": 26.2,
+            "impact_frames": [47, 50],
+            "estimator": "naive",
+            "frame_count": 3,
+            "confidence": 0.54,
+            "selection_path": "legacy_naive_suspect",
+        },
+    ]
+
+    assert select_best_shot_result(results)["launch_angle_deg"] == 17.1
+
+
+def test_select_best_shot_result_uses_latest_group_as_same_tier_tiebreaker():
+    results = [
+        {
+            "launch_angle_deg": 14.0,
+            "impact_frames": [35, 38],
+            "estimator": "geometry_single_frame",
+            "frame_count": 1,
+            "confidence": 0.72,
+            "selection_path": "geometry_single_frame",
+        },
+        {
+            "launch_angle_deg": 18.5,
+            "impact_frames": [38, 40],
+            "estimator": "geometry_single_frame",
+            "frame_count": 1,
+            "confidence": 0.72,
+            "selection_path": "geometry_single_frame",
+        },
+    ]
+
+    assert select_best_shot_result(results)["launch_angle_deg"] == 18.5
 
 
 def test_select_best_shot_result_rejects_empty_results():

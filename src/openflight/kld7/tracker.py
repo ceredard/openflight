@@ -632,13 +632,16 @@ class KLD7Tracker:
             best["confidence"] = min(float(best.get("confidence", 0.0)), 0.45)
         logger.info(
             "[KLD7] RADC: angle=%.1f° speed=%.1f mph snr=%.1f conf=%.2f frames=%d "
-            "est=%s fit_rmse=%s",
+            "est=%s path=%s selected_frames=%s selected_t_ms=%s fit_rmse=%s",
             best["launch_angle_deg"],
             best["ball_speed_mph"],
             best["avg_snr_db"],
             best["confidence"],
             best["frame_count"],
             best.get("estimator", "naive"),
+            best.get("selection_path"),
+            best.get("selected_frame_indices"),
+            best.get("selected_t_ms"),
             best.get("geom_fit_rmse_deg"),
         )
 
