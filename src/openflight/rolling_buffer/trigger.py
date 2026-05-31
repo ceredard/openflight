@@ -850,7 +850,16 @@ class SoundTrigger(TriggerStrategy):
             capture.first_byte_timestamp = float(first_byte_timestamp)
 
         clock_sync = getattr(radar, "last_clock_sync", None)
-        clock_offset_s = clock_sync.get("best_offset_s") if isinstance(clock_sync, dict) else None
+        clock_sync_usable = (
+            bool(clock_sync.get("usable_for_trigger_timestamps"))
+            if isinstance(clock_sync, dict)
+            else False
+        )
+        clock_offset_s = (
+            clock_sync.get("best_offset_s")
+            if isinstance(clock_sync, dict) and clock_sync_usable
+            else None
+        )
         if clock_offset_s is not None:
             try:
                 capture.apply_trigger_timestamp_from_clock_sync(float(clock_offset_s))
@@ -859,6 +868,11 @@ class SoundTrigger(TriggerStrategy):
                     "[TRIGGER] Ignoring invalid OPS clock-sync offset: %r",
                     clock_offset_s,
                 )
+        elif isinstance(clock_sync, dict) and clock_sync.get("best_offset_s") is not None:
+            logger.info(
+                "[TRIGGER] Ignoring unusable OPS clock sync for trigger timestamp (method=%s)",
+                clock_sync.get("clock_sync_method", "unknown"),
+            )
 
         if capture.first_byte_timestamp is not None and capture.trigger_timestamp is None:
             capture.apply_trigger_timestamp_from_first_byte()

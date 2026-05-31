@@ -174,7 +174,7 @@ class TestSpeedReading:
             direction=Direction.OUTBOUND,
             magnitude=1500,
             timestamp=12345.67,
-            unit="mph"
+            unit="mph",
         )
 
         assert reading.speed == 150.0
@@ -199,9 +199,10 @@ class _FakeClockSerial:
     simulate a missing/garbled reply).
     """
 
-    def __init__(self, clock_value="137.429", respond=True):
+    def __init__(self, clock_value="137.429", respond=True, clock_values=None):
         self.is_open = True
         self._clock_value = clock_value
+        self._clock_values = list(clock_values) if clock_values is not None else None
         self._respond = respond
         self._pending = b""
         self.writes = []
@@ -212,7 +213,11 @@ class _FakeClockSerial:
     def write(self, data):
         self.writes.append(data)
         if self._respond:
-            self._pending = ('{"Clock":"%s"}' % self._clock_value).encode("ascii")
+            if self._clock_values:
+                value = self._clock_values[min(len(self.writes) - 1, len(self._clock_values) - 1)]
+            else:
+                value = self._clock_value
+            self._pending = ('{"Clock":"%s"}' % value).encode("ascii")
         return len(data)
 
     @property
@@ -229,18 +234,22 @@ class TestParseOpsClock:
 
     def test_parse_quoted_decimal(self):
         from openflight.ops243 import _parse_ops_clock
+
         assert _parse_ops_clock('{"Clock":"137.429"}') == pytest.approx(137.429)
 
     def test_parse_whole_seconds(self):
         from openflight.ops243 import _parse_ops_clock
+
         assert _parse_ops_clock('{"Clock":"50"}') == pytest.approx(50.0)
 
     def test_parse_unquoted_value(self):
         from openflight.ops243 import _parse_ops_clock
+
         assert _parse_ops_clock('{"Clock": 12.5}') == pytest.approx(12.5)
 
     def test_parse_garbage_returns_none(self):
         from openflight.ops243 import _parse_ops_clock
+
         assert _parse_ops_clock("no clock here") is None
         assert _parse_ops_clock("") is None
 
@@ -264,6 +273,9 @@ class TestReadClockSync:
         # offset = host_epoch - radar_clock, and host epoch >> 137s, so it is large.
         assert summary["best_offset_s"] > 1_000_000
         assert summary["best_read_latency_ms"] >= 0.0
+        assert summary["clock_resolution"] == "fractional"
+        assert summary["clock_sync_method"] == "fractional_clock"
+        assert summary["usable_for_trigger_timestamps"] is True
         assert len(summary["reads"]) == 3
         assert all(r["radar_clock_s"] == pytest.approx(137.429) for r in summary["reads"])
         assert radar.last_clock_sync is summary
@@ -282,6 +294,36 @@ class TestReadClockSync:
         assert summary["best_offset_s"] is None
         assert summary["offset_spread_ms"] is None
         assert summary["samples"] == 2
+
+    def test_whole_second_clock_without_rollover_is_not_usable(self):
+        radar = self._radar(_FakeClockSerial(clock_value="1882"))
+        summary = radar.read_clock_sync(
+            samples=3,
+            per_read_timeout=0.01,
+            max_sync_duration_s=0.0,
+        )
+
+        assert summary["clock_resolution"] == "integer"
+        assert summary["clock_sync_method"] == "integer_unusable_no_rollover"
+        assert summary["usable_for_trigger_timestamps"] is False
+        assert summary["best_offset_s"] is None
+        assert summary["raw_best_offset_s"] is not None
+
+    def test_whole_second_clock_rollover_estimates_usable_offset(self):
+        radar = self._radar(_FakeClockSerial(clock_values=["1882", "1882", "1883"]))
+        summary = radar.read_clock_sync(
+            samples=2,
+            per_read_timeout=0.01,
+            max_sync_duration_s=0.1,
+            sample_interval_s=0.0,
+        )
+
+        assert summary["clock_resolution"] == "integer"
+        assert summary["clock_sync_method"] == "integer_rollover"
+        assert summary["usable_for_trigger_timestamps"] is True
+        assert summary["best_offset_s"] is not None
+        assert summary["rollover_uncertainty_ms"] is not None
+        assert summary["samples"] == 3
 
     def test_raises_when_not_connected(self):
         radar = OPS243Radar.__new__(OPS243Radar)

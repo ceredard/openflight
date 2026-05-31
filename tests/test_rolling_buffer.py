@@ -592,7 +592,10 @@ class TestSoundTriggerTimestampPropagation:
         radar = MagicMock()
         radar.wait_for_hardware_trigger.return_value = '{"sample_time": 0.0}'
         radar.last_hardware_trigger_first_byte_timestamp = 12345.678
-        radar.last_clock_sync = {"best_offset_s": 12000.0}
+        radar.last_clock_sync = {
+            "best_offset_s": 12000.0,
+            "usable_for_trigger_timestamps": True,
+        }
 
         capture = IQCapture(
             sample_time=100.000,
@@ -620,6 +623,48 @@ class TestSoundTriggerTimestampPropagation:
         assert result is capture
         assert result.trigger_timestamp == pytest.approx(12100.068)
         assert result.trigger_timestamp_source == "ops_clock_sync"
+
+    def test_sound_trigger_ignores_unusable_ops_clock_sync(self):
+        """Whole-second-only clock sync should not override first-byte timing."""
+        from openflight.rolling_buffer.trigger import SoundTrigger
+
+        radar = MagicMock()
+        radar.wait_for_hardware_trigger.return_value = '{"sample_time": 0.0}'
+        radar.last_hardware_trigger_first_byte_timestamp = 12345.678
+        radar.last_clock_sync = {
+            "best_offset_s": 12000.0,
+            "usable_for_trigger_timestamps": False,
+            "clock_sync_method": "integer_unusable_no_rollover",
+        }
+
+        capture = IQCapture(
+            sample_time=100.000,
+            trigger_time=100.068,
+            i_samples=[2048] * 4096,
+            q_samples=[2048] * 4096,
+            first_byte_timestamp=12345.678,
+        )
+        processor = MagicMock()
+        processor.parse_capture.return_value = capture
+        processor.process_standard.return_value = SpeedTimeline(
+            readings=[
+                SpeedReading(
+                    speed_mph=100.0,
+                    magnitude=1000.0,
+                    timestamp_ms=68.0,
+                    direction="outbound",
+                )
+            ],
+            sample_rate_hz=937.5,
+        )
+
+        trigger = SoundTrigger(pre_trigger_segments=12)
+        result = trigger.wait_for_trigger(radar, processor, timeout=1.0)
+
+        expected_post_trigger_s = (capture.duration_ms - capture.trigger_offset_ms) / 1000.0
+        assert result is capture
+        assert result.trigger_timestamp == pytest.approx(12345.678 - expected_post_trigger_s)
+        assert result.trigger_timestamp_source == "first_byte"
 
 
 class TestPollingTrigger:

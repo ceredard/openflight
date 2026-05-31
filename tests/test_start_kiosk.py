@@ -58,6 +58,22 @@ def test_plain_kld7_keeps_legacy_angle_path():
     assert "--kld7-vertical-estimator" not in command
     assert "--kld7-mount-tilt" not in command
     assert "--kld7-ball-distance" not in command
+    assert "setup_kld7_latency" not in command
+
+
+def test_startup_applies_kld7_latency_setup_before_server_start():
+    """Kiosk startup should attempt the FTDI latency setup for K-LD7 sessions."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    setup_idx = script.index("\nconfigure_kld7_latency\n")
+    server_start_idx = script.index("$SERVER_CMD &")
+
+    assert "scripts/setup/setup_kld7_latency.sh" in script
+    assert "sudo -n \"$setup_script\" --latency 1" in script
+    assert setup_idx < server_start_idx
 
 
 def test_kld7_geometry_preset_preserves_explicit_overrides():

@@ -266,36 +266,46 @@ class OPS243Radar:
 
         return response.strip()
 
-    def read_clock_sync(self, samples: int = 7, per_read_timeout: float = 0.2) -> dict:
+    def read_clock_sync(
+        self,
+        samples: int = 7,
+        per_read_timeout: float = 0.2,
+        max_sync_duration_s: float = 1.25,
+        sample_interval_s: float = 0.01,
+    ) -> dict:
         """Map the OPS internal clock to host epoch via repeated ``C?`` reads.
 
         The radar stamps its rolling-buffer trigger on an internal clock
-        (``trigger_time``, ms resolution) that is *immune to USB read latency*.
-        To convert that to a host epoch later we need the offset
-        ``O = host_epoch - radar_clock``. The current impact reconstruction
-        (``first_byte - post_trigger``) instead carries the variable USB
-        buffer-dump read latency, which a Δt replay of the 2026-05-29 session
-        showed to be the dominant (~±60 ms) timing-alignment error against the
-        K-LD7 frames.
+        (``trigger_time``, fractional seconds) that is *immune to USB read
+        latency*. To convert that to a host epoch later we need the offset
+        ``O = host_epoch - radar_clock``.
 
         Each read is bracketed by ``time.time()`` before and after a *tight*
         poll for the reply (not the fixed-0.1s ``_send_command`` path), so the
         radar sampled its clock somewhere inside that bracket. ``offset_s`` is
         the bracket midpoint minus the radar clock; ``read_latency_ms`` (the
-        bracket width) bounds its uncertainty. The raw reply is kept so the
-        firmware's clock resolution is visible in the logged data.
+        bracket width) bounds its uncertainty.
+
+        Some OPS firmware reports ``C?`` in whole seconds while rolling-buffer
+        captures report fractional ``trigger_time`` values. Whole-second reads
+        are not directly usable because their unknown fractional phase can be
+        almost one second off. When the clock is integer-only, this method keeps
+        sampling until it observes a one-second rollover and uses that boundary
+        to estimate the offset. If no precise sync is available, the summary is
+        marked unusable so the trigger path can fall back to first-byte timing.
 
         Sound-triggered captures use this mapping to convert the radar's
-        internal ``trigger_time`` to host epoch. If sync is unavailable, the
-        trigger path falls back to first-byte timing. Returns a summary dict
-        (also stored on ``self.last_clock_sync``); never raises on a
-        missing/garbled reply.
+        internal ``trigger_time`` to host epoch only when
+        ``usable_for_trigger_timestamps`` is true. Returns a summary dict (also
+        stored on ``self.last_clock_sync``); never raises on a missing/garbled
+        reply.
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
 
         reads: List[dict] = []
-        for _ in range(max(1, samples)):
+
+        def read_once() -> None:
             self.serial.reset_input_buffer()
             host_before = time.time()
             self.serial.write(b"C?")
@@ -323,27 +333,103 @@ class OPS243Radar:
                     "raw": buf.strip(),
                 }
             )
-            time.sleep(0.01)
+
+        for idx in range(max(1, samples)):
+            if idx:
+                time.sleep(max(0.0, sample_interval_s))
+            read_once()
 
         valid = [r for r in reads if r["radar_clock_s"] is not None]
-        best = min(valid, key=lambda r: r["read_latency_ms"]) if valid else None
+        has_fractional_clock = any(
+            abs(float(r["radar_clock_s"]) - round(float(r["radar_clock_s"]))) > 1e-6 for r in valid
+        )
+
+        def find_integer_rollover() -> Optional[tuple[dict, dict]]:
+            previous = None
+            for read in valid:
+                if previous is not None:
+                    prev_clock = float(previous["radar_clock_s"])
+                    current_clock = float(read["radar_clock_s"])
+                    if current_clock - prev_clock == 1.0:
+                        return previous, read
+                previous = read
+            return None
+
+        rollover = None if has_fractional_clock else find_integer_rollover()
+        sync_deadline = time.monotonic() + max(0.0, max_sync_duration_s)
+        while valid and not has_fractional_clock and rollover is None:
+            if time.monotonic() >= sync_deadline:
+                break
+            time.sleep(max(0.0, sample_interval_s))
+            read_once()
+            valid = [r for r in reads if r["radar_clock_s"] is not None]
+            rollover = find_integer_rollover()
+
+        best_raw = min(valid, key=lambda r: r["read_latency_ms"]) if valid else None
         offsets = [r["offset_s"] for r in valid]
+        usable_for_trigger_timestamps = False
+        clock_sync_method = "no_valid_reads"
+        clock_resolution = None
+        best_offset_s = None
+        rollover_uncertainty_ms = None
+
+        if valid and has_fractional_clock:
+            usable_for_trigger_timestamps = True
+            clock_sync_method = "fractional_clock"
+            clock_resolution = "fractional"
+            best_offset_s = best_raw["offset_s"] if best_raw else None
+        elif valid:
+            clock_resolution = "integer"
+            if rollover is not None:
+                before_rollover, after_rollover = rollover
+                rollover_host_mid = (
+                    float(before_rollover["host_mid"]) + float(after_rollover["host_mid"])
+                ) / 2.0
+                best_offset_s = rollover_host_mid - float(after_rollover["radar_clock_s"])
+                rollover_uncertainty_ms = (
+                    float(after_rollover["host_mid"]) - float(before_rollover["host_mid"])
+                ) * 1000.0
+                usable_for_trigger_timestamps = True
+                clock_sync_method = "integer_rollover"
+            else:
+                clock_sync_method = "integer_unusable_no_rollover"
+
         summary = {
             "samples": len(reads),
             "valid_samples": len(valid),
-            "best_offset_s": best["offset_s"] if best else None,
-            "best_read_latency_ms": best["read_latency_ms"] if best else None,
+            "best_offset_s": best_offset_s,
+            "raw_best_offset_s": best_raw["offset_s"] if best_raw else None,
+            "best_read_latency_ms": best_raw["read_latency_ms"] if best_raw else None,
             "offset_spread_ms": (
                 (max(offsets) - min(offsets)) * 1000.0 if len(offsets) >= 2 else None
             ),
+            "clock_resolution": clock_resolution,
+            "clock_sync_method": clock_sync_method,
+            "usable_for_trigger_timestamps": usable_for_trigger_timestamps,
+            "rollover_uncertainty_ms": rollover_uncertainty_ms,
             "reads": reads,
         }
         self.last_clock_sync = summary
-        if best:
+        if usable_for_trigger_timestamps:
             logger.info(
-                "[OPS] Clock sync: offset=%.3fs best_read_latency=%.1fms spread=%sms (%d/%d valid)",
-                best["offset_s"],
-                best["read_latency_ms"],
+                "[OPS] Clock sync: method=%s offset=%.3fs best_read_latency=%.1fms "
+                "spread=%sms rollover_uncertainty=%sms (%d/%d valid)",
+                clock_sync_method,
+                best_offset_s,
+                best_raw["read_latency_ms"],
+                "n/a"
+                if summary["offset_spread_ms"] is None
+                else f"{summary['offset_spread_ms']:.1f}",
+                "n/a" if rollover_uncertainty_ms is None else f"{rollover_uncertainty_ms:.1f}",
+                len(valid),
+                len(reads),
+            )
+        elif valid:
+            logger.warning(
+                "[OPS] Clock sync unusable for trigger timestamps: method=%s "
+                "resolution=%s spread=%sms (%d/%d valid); falling back to first-byte timing",
+                clock_sync_method,
+                clock_resolution,
                 "n/a"
                 if summary["offset_spread_ms"] is None
                 else f"{summary['offset_spread_ms']:.1f}",

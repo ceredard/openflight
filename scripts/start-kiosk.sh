@@ -262,6 +262,42 @@ cleanup() {
     exit 0
 }
 
+configure_kld7_latency() {
+    local setup_script="$PROJECT_DIR/scripts/setup/setup_kld7_latency.sh"
+
+    if [ "$KLD7" != true ] && [ "$KLD7_HORIZONTAL" != true ] && [ ! -e /dev/kld7_vertical ] && [ ! -e /dev/kld7_horizontal ]; then
+        return 0
+    fi
+
+    if [ "$(uname -s)" != "Linux" ]; then
+        warn "Skipping K-LD7 FTDI latency setup (Linux-only)"
+        return 0
+    fi
+
+    if [ ! -x "$setup_script" ]; then
+        warn "Skipping K-LD7 FTDI latency setup (missing $setup_script)"
+        return 0
+    fi
+
+    log "Applying K-LD7 FTDI latency setup..."
+    if [ "$(id -u)" -eq 0 ]; then
+        if "$setup_script" --latency 1; then
+            log "K-LD7 FTDI latency setup complete"
+        else
+            warn "K-LD7 FTDI latency setup failed; continuing startup"
+        fi
+    elif command -v sudo >/dev/null 2>&1; then
+        if sudo -n "$setup_script" --latency 1; then
+            log "K-LD7 FTDI latency setup complete"
+        else
+            warn "K-LD7 FTDI latency setup failed; continuing startup"
+            warn "  Run manually if needed: sudo scripts/setup/setup_kld7_latency.sh"
+        fi
+    else
+        warn "Skipping K-LD7 FTDI latency setup (sudo not available)"
+    fi
+}
+
 trap cleanup SIGINT SIGTERM
 
 cd "$PROJECT_DIR"
@@ -386,6 +422,8 @@ fi
 
 # Activate venv
 source .venv/bin/activate
+
+configure_kld7_latency
 
 # Check if UI is built
 if [ ! -d "ui/dist" ]; then
