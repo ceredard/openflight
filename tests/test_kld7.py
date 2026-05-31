@@ -1670,7 +1670,7 @@ class TestRADCAngleExtraction:
                 "ops_anchored_peak_min_snr": 2.5,
                 "horizontal_angle_limit_deg": 30.0,
                 "orientation": "vertical",
-                "vertical_estimator": "geometry",
+                "vertical_estimator": "naive",
                 "shot_timestamp": None,
                 "impact_timestamp": None,
                 "mount_deg": 18.0,

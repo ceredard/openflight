@@ -124,7 +124,7 @@ class KLD7Tracker:
     radc_horizontal_impact_energy_threshold = 1.85
     radc_horizontal_retry_impact_energy_threshold = 0.5
     radc_horizontal_angle_limit_deg = 15.0
-    vertical_estimator = "geometry"
+    vertical_estimator = "naive"
     mount_tilt_deg = 18.0
     ball_distance_ft = 5.5
 
@@ -147,7 +147,7 @@ class KLD7Tracker:
         radc_horizontal_impact_energy_threshold: float = 1.85,
         radc_horizontal_retry_impact_energy_threshold: float = 0.5,
         radc_horizontal_angle_limit_deg: float = 15.0,
-        vertical_estimator: str = "geometry",
+        vertical_estimator: str = "naive",
         mount_tilt_deg: float = 18.0,
         ball_distance_ft: float = 5.5,
     ):

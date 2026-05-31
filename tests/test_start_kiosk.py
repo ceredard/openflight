@@ -46,6 +46,17 @@ def test_kld7_geometry_preset_enables_field_geometry_defaults():
     assert "--kld7-ball-distance 5" in command
 
 
+def test_plain_kld7_keeps_legacy_angle_path():
+    """The existing --kld7 flag should not opt into geometry by accident."""
+    result = _dry_run("--kld7")
+    command = result.stdout.strip()
+
+    assert "--kld7 --kld7-port /dev/kld7_vertical --kld7-angle-offset 8" in command
+    assert "--kld7-vertical-estimator" not in command
+    assert "--kld7-mount-tilt" not in command
+    assert "--kld7-ball-distance" not in command
+
+
 def test_kld7_geometry_preset_preserves_explicit_overrides():
     """Specific K-LD7 settings should still win over geometry preset defaults."""
     result = _dry_run(

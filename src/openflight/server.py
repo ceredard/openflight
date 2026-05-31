@@ -930,7 +930,7 @@ def init_kld7(
     radc_horizontal_impact_energy_threshold=1.85,
     radc_horizontal_retry_impact_energy_threshold=0.5,
     radc_horizontal_angle_limit_deg=15.0,
-    vertical_estimator="geometry",
+    vertical_estimator="naive",
     mount_tilt_deg=18.0,
     ball_distance_ft=5.5,
 ) -> bool:
@@ -2297,10 +2297,10 @@ def main():
     parser.add_argument(
         "--kld7-vertical-estimator",
         choices=("geometry", "naive"),
-        default="geometry",
+        default="naive",
         help=(
-            "Vertical launch-angle estimator: 'geometry' (trajectory fit, "
-            "default) or 'naive' (legacy bearing average + offset)"
+            "Vertical launch-angle estimator: 'naive' (legacy bearing average + offset, "
+            "default) or 'geometry' (trajectory fit)"
         ),
     )
     parser.add_argument(

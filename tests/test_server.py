@@ -266,10 +266,36 @@ class TestKLD7Initialization:
             "radc_horizontal_impact_energy_threshold": 1.4,
             "radc_horizontal_retry_impact_energy_threshold": 0.35,
             "radc_horizontal_angle_limit_deg": 30.0,
-            "vertical_estimator": "geometry",
+            "vertical_estimator": "naive",
             "mount_tilt_deg": 18.0,
             "ball_distance_ft": 5.5,
         }
+
+    def test_init_kld7_defaults_to_legacy_vertical_estimator(self, monkeypatch):
+        """Plain --kld7 should use the legacy bearing-average path unless opted in."""
+        import openflight.kld7 as kld7_package
+
+        created = []
+
+        class FakeKLD7Tracker:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                created.append(self)
+
+            def connect(self):
+                return True
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(kld7_package, "KLD7Tracker", FakeKLD7Tracker)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+
+        assert server_module.init_kld7(port="/dev/test-kld7") is True
+
+        assert created[0].kwargs["vertical_estimator"] == "naive"
 
 
 class TestStaticRoutes:
