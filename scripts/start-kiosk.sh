@@ -423,14 +423,13 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
-# Check if venv exists
-if [ ! -d ".venv" ]; then
-    error "Virtual environment not found. Run: uv venv && uv pip install -e '.[ui]'"
+# Ensure the environment is in sync (uv recreates/repairs .venv as needed,
+# so a moved project dir self-heals instead of failing with "command not found")
+if ! command -v uv >/dev/null 2>&1; then
+    error "uv not found. Install it: https://docs.astral.sh/uv/"
     exit 1
 fi
-
-# Activate venv
-source .venv/bin/activate
+uv sync --quiet
 
 configure_kld7_latency
 
@@ -498,7 +497,7 @@ else
     log "Ballistic carry model disabled (using legacy table)"
 fi
 
-$SERVER_CMD &
+uv run $SERVER_CMD &
 SERVER_PID=$!
 
 # Wait for server to be ready
