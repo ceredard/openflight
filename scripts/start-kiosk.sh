@@ -43,6 +43,10 @@ EXPERIMENTAL_KLD7_HORIZONTAL_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_RETRY_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
 BALLISTICS=false
+RECORD_VIDEO=false
+VIDEO_DIR=""
+VIDEO_PRE_ROLL=""
+VIDEO_POST_ROLL=""
 
 # Buffer split presets (pre/post trigger segments out of 32 total)
 # At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
@@ -203,6 +207,22 @@ while [[ $# -gt 0 ]]; do
             BALLISTICS=true
             shift
             ;;
+        --record-video)
+            RECORD_VIDEO=true
+            shift
+            ;;
+        --video-dir)
+            VIDEO_DIR="$2"
+            shift 2
+            ;;
+        --video-pre-roll)
+            VIDEO_PRE_ROLL="$2"
+            shift 2
+            ;;
+        --video-post-roll)
+            VIDEO_POST_ROLL="$2"
+            shift 2
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -328,6 +348,13 @@ fi
 
 if [ "$BALLISTICS" = true ]; then
     SERVER_CMD="$SERVER_CMD --ballistics"
+fi
+
+if [ "$RECORD_VIDEO" = true ]; then
+    SERVER_CMD="$SERVER_CMD --record-video"
+    [ -n "$VIDEO_DIR" ] && SERVER_CMD="$SERVER_CMD --video-dir $VIDEO_DIR"
+    [ -n "$VIDEO_PRE_ROLL" ] && SERVER_CMD="$SERVER_CMD --video-pre-roll $VIDEO_PRE_ROLL"
+    [ -n "$VIDEO_POST_ROLL" ] && SERVER_CMD="$SERVER_CMD --video-post-roll $VIDEO_POST_ROLL"
 fi
 
 if [ -n "$TRIGGER" ]; then

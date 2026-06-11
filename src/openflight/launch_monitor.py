@@ -240,6 +240,7 @@ class Shot:
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
+        video_filename: Replay clip filename, relative to the video directory
     """
 
     ball_speed_mph: float
@@ -280,6 +281,7 @@ class Shot:
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
     club_path_deg: Optional[float] = None  # Club path from K-LD7 (horizontal)
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
+    video_filename: Optional[str] = None  # Replay clip filename, relative to the video directory
 
     @property
     def ball_speed_ms(self) -> float:

@@ -21,6 +21,12 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
+from .camera.video_recorder import (
+    PICAMERA_VIDEO_AVAILABLE,
+    MockVideoRecorder,
+    VideoRecorder,
+    VideoRecorderConfig,
+)
 from .launch_monitor import ClubType, Shot
 from .ops243 import Direction, SpeedReading, set_show_raw_readings
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
@@ -103,6 +109,11 @@ frame_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
 
+# Shot replay video recording
+video_recorder = None
+video_enabled: bool = False
+video_dir: Optional[Path] = None
+
 
 def _run_shutdown_step(name: str, callback) -> None:
     """Run one shutdown step without preventing later hardware cleanup."""
@@ -131,6 +142,9 @@ def _cleanup_hardware_for_shutdown() -> None:
     if camera:
         _run_shutdown_step("camera stop", camera.stop)
         _run_shutdown_step("camera close", camera.close)
+
+    if video_recorder:
+        _run_shutdown_step("video recorder stop", video_recorder.stop)
 
     _run_shutdown_step("launch monitor stop", stop_monitor)
 
@@ -822,6 +836,7 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
+        "video_url": f"/videos/{shot.video_filename}" if shot.video_filename else None,
     }
 
 
@@ -835,6 +850,14 @@ def index():
 def display():
     """Serve the React app for TV display mode."""
     return send_from_directory(_react_app_dir(), "index.html")
+
+
+@app.route("/videos/<path:filename>")
+def serve_video(filename):
+    """Serve recorded shot replay videos."""
+    if not video_dir:
+        return Response(status=404)
+    return send_from_directory(video_dir, filename)
 
 
 @app.route("/<path:path>")
@@ -919,6 +942,47 @@ def init_camera(
         print(f"Failed to initialize camera: {e}")
         camera = None
         camera_tracker = None
+        return False
+
+
+def init_video_recorder(
+    output_dir: Optional[str] = None,
+    pre_roll_seconds: float = 3.0,
+    post_roll_seconds: float = 2.0,
+    mock: bool = False,
+) -> bool:
+    """Initialize the shot replay video recorder (Pi Camera Module 3)."""
+    global video_recorder, video_enabled, video_dir  # pylint: disable=global-statement
+
+    config = VideoRecorderConfig(
+        pre_roll_seconds=pre_roll_seconds,
+        post_roll_seconds=post_roll_seconds,
+    )
+    if output_dir:
+        config.output_dir = Path(output_dir)
+    video_dir = config.output_dir
+
+    if mock:
+        video_recorder = MockVideoRecorder(config)
+        video_recorder.start()
+        video_enabled = True
+        return True
+
+    if not PICAMERA_VIDEO_AVAILABLE:
+        logger.warning("[SERVER] picamera2 not available - video recording disabled")
+        return False
+
+    try:
+        recorder = VideoRecorder(config)
+        recorder.start()
+        video_recorder = recorder
+        video_enabled = True
+        logger.info("[SERVER] Video recorder started (output: %s)", config.output_dir)
+        return True
+    except Exception as e:
+        logger.warning("[SERVER] Failed to start video recorder: %s", e, exc_info=True)
+        video_recorder = None
+        video_enabled = False
         return False
 
 
@@ -1491,6 +1555,17 @@ def on_shot_detected(shot: Shot):
 
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
+    if video_recorder and video_enabled:
+        try:
+            session_log = get_session_logger()
+            shot_number = (session_log.stats.get("shots_detected", 0) + 1) if session_log else 1
+            session_id = (session_log.session_id if session_log else None) or "session"
+            shot.video_filename = video_recorder.save_clip_async(
+                f"{session_id}_shot{shot_number:04d}"
+            )
+        except Exception as e:
+            logger.warning("[SERVER] Failed to save shot video: %s", e, exc_info=True)
+
     kld7_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
@@ -1869,6 +1944,7 @@ def on_shot_detected(shot: Shot):
                 club_angle_deg=shot.club_angle_deg,
                 club_path_deg=shot.club_path_deg,
                 spin_axis_deg=shot.spin_axis_deg,
+                video_filename=shot.video_filename,
                 impact_timestamp=shot.impact_timestamp,
                 pipeline_ms={
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
@@ -2313,6 +2389,28 @@ def main():
         "--roboflow-api-key", help="Roboflow API key (can also use ROBOFLOW_API_KEY env var)"
     )
     parser.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record shot replay videos with the Pi Camera Module 3",
+    )
+    parser.add_argument(
+        "--video-dir",
+        default=None,
+        help="Directory for shot replay videos (default: ~/openflight_videos)",
+    )
+    parser.add_argument(
+        "--video-pre-roll",
+        type=float,
+        default=3.0,
+        help="Seconds of pre-shot footage to retain in the replay clip (default: 3.0)",
+    )
+    parser.add_argument(
+        "--video-post-roll",
+        type=float,
+        default=2.0,
+        help="Seconds of post-shot footage to record in the replay clip (default: 2.0)",
+    )
+    parser.add_argument(
         "--session-location",
         "-l",
         default="range",
@@ -2568,6 +2666,18 @@ def main():
             print("Camera not available - running without camera")
     else:
         print("Camera disabled by --no-camera flag")
+
+    # Initialize shot replay video recorder (if enabled)
+    if args.record_video:
+        if init_video_recorder(
+            output_dir=args.video_dir,
+            pre_roll_seconds=args.video_pre_roll,
+            post_roll_seconds=args.video_post_roll,
+            mock=args.mock,
+        ):
+            print(f"Shot replay video recording enabled (output: {video_dir})")
+        else:
+            print("Video recording requested but unavailable - running without video")
 
     if experimental_kld7_raw_radc_logging:
         print("Experimental K-LD7 raw RADC payload logging enabled")

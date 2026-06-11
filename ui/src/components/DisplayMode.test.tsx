@@ -33,6 +33,7 @@ const shot: Shot = {
   spin_confidence: 0.8,
   spin_quality: 'high',
   carry_spin_adjusted: 261,
+  video_url: null,
 };
 
 describe('DisplayMode', () => {

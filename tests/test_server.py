@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import server as server_module
+from openflight.camera.video_recorder import MockVideoRecorder
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.server import (
@@ -68,6 +69,42 @@ class TestShutdownCleanup:
         server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["camera", "monitor"]
+
+    def test_shutdown_cleanup_stops_video_recorder(self, monkeypatch):
+        """Shot replay video recorder should be stopped during shutdown cleanup."""
+        calls = []
+
+        class FakeVideoRecorder:
+            def stop(self):
+                calls.append("video_recorder.stop")
+
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
+        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: None)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "video_recorder", FakeVideoRecorder())
+        monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
+
+        server_module._cleanup_hardware_for_shutdown()
+
+        assert calls == ["video_recorder.stop", "monitor"]
+
+    def test_shutdown_cleanup_skips_video_recorder_when_unset(self, monkeypatch):
+        """Shutdown cleanup should not error when no video recorder is configured."""
+        calls = []
+
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
+        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: None)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "video_recorder", None)
+        monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
+
+        server_module._cleanup_hardware_for_shutdown()
+
+        assert calls == ["monitor"]
 
 
 class TestSessionErrorLogging:
@@ -537,6 +574,29 @@ class TestShotToDict:
         assert result["spin_phase_confirmed"] is True
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
 
+    def test_video_url_present_when_filename_set(self):
+        """shot_to_dict should expose a /videos/ URL when a clip was recorded."""
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            video_filename="session_shot0001.mp4",
+        )
+
+        result = shot_to_dict(shot)
+
+        assert result["video_url"] == "/videos/session_shot0001.mp4"
+
+    def test_video_url_none_without_filename(self):
+        """shot_to_dict should return null video_url when no clip was recorded."""
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+        )
+
+        result = shot_to_dict(shot)
+
+        assert result["video_url"] is None
+
 
 class TestEstimateLaunchAngle:
     """Tests for launch angle estimation from club type and ball speed."""
@@ -643,6 +703,152 @@ class TestEstimateLaunchAngle:
         """Spin without club speed should raise confidence to 0.35."""
         _, conf = estimate_launch_angle(ClubType.DRIVER, 143, spin_rpm=2500)
         assert conf == 0.35
+
+
+class TestVideoRecording:
+    """Tests for shot replay video recording integration."""
+
+    def test_init_video_recorder_mock_mode(self, monkeypatch, tmp_path):
+        """Mock mode should start a MockVideoRecorder and enable video."""
+        monkeypatch.setattr(server_module, "video_recorder", None)
+        monkeypatch.setattr(server_module, "video_enabled", False)
+        monkeypatch.setattr(server_module, "video_dir", None)
+
+        ok = server_module.init_video_recorder(output_dir=str(tmp_path), mock=True)
+
+        assert ok is True
+        assert server_module.video_enabled is True
+        assert server_module.video_dir == tmp_path
+        assert isinstance(server_module.video_recorder, MockVideoRecorder)
+        assert server_module.video_recorder.is_running is True
+
+    def test_init_video_recorder_unavailable_without_picamera(self, monkeypatch, tmp_path):
+        """Without picamera2 and without --mock, video recording stays disabled."""
+        monkeypatch.setattr(server_module, "video_recorder", None)
+        monkeypatch.setattr(server_module, "video_enabled", False)
+        monkeypatch.setattr(server_module, "video_dir", None)
+        monkeypatch.setattr(server_module, "PICAMERA_VIDEO_AVAILABLE", False)
+
+        ok = server_module.init_video_recorder(output_dir=str(tmp_path), mock=False)
+
+        assert ok is False
+        assert server_module.video_enabled is False
+        assert server_module.video_recorder is None
+
+    def test_serve_video_returns_404_when_video_dir_unset(self, monkeypatch):
+        """The /videos route should 404 if no video directory is configured."""
+        monkeypatch.setattr(server_module, "video_dir", None)
+        client = server_module.app.test_client()
+
+        response = client.get("/videos/clip.mp4")
+
+        assert response.status_code == 404
+
+    def test_serve_video_serves_file_from_video_dir(self, monkeypatch, tmp_path):
+        """The /videos route should serve files from the configured video directory."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake-mp4-data")
+        monkeypatch.setattr(server_module, "video_dir", tmp_path)
+        client = server_module.app.test_client()
+
+        response = client.get("/videos/clip.mp4")
+
+        assert response.status_code == 200
+        assert response.data == b"fake-mp4-data"
+
+    def _setup_mock_shot_pipeline(self, monkeypatch):
+        """Disable non-video processing so on_shot_detected is easy to test."""
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    def test_on_shot_detected_saves_video_clip(self, monkeypatch):
+        """A detected shot should request a replay clip and record its filename."""
+        self._setup_mock_shot_pipeline(monkeypatch)
+
+        save_calls = []
+
+        class FakeVideoRecorder:
+            def save_clip_async(self, filename_stem):
+                save_calls.append(filename_stem)
+                return f"{filename_stem}.mp4"
+
+        logged_shots = []
+
+        class FakeSessionLogger:
+            session_id = "session_20240101"
+            stats = {"shots_detected": 0}
+
+            def log_shot(self, **kwargs):
+                logged_shots.append(kwargs)
+
+        monkeypatch.setattr(server_module, "video_recorder", FakeVideoRecorder())
+        monkeypatch.setattr(server_module, "video_enabled", True)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            mode="mock",
+        )
+        on_shot_detected(shot)
+
+        assert save_calls == ["session_20240101_shot0001"]
+        assert shot.video_filename == "session_20240101_shot0001.mp4"
+        assert logged_shots[0]["video_filename"] == "session_20240101_shot0001.mp4"
+
+    def test_on_shot_detected_skips_video_when_disabled(self, monkeypatch):
+        """No clip should be requested when video recording is disabled."""
+        self._setup_mock_shot_pipeline(monkeypatch)
+
+        save_calls = []
+
+        class FakeVideoRecorder:
+            def save_clip_async(self, filename_stem):
+                save_calls.append(filename_stem)
+                return f"{filename_stem}.mp4"
+
+        monkeypatch.setattr(server_module, "video_recorder", FakeVideoRecorder())
+        monkeypatch.setattr(server_module, "video_enabled", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            mode="mock",
+        )
+        on_shot_detected(shot)
+
+        assert save_calls == []
+        assert shot.video_filename is None
+
+    def test_on_shot_detected_continues_if_video_save_fails(self, monkeypatch):
+        """A video recorder error must not prevent the rest of shot processing."""
+        self._setup_mock_shot_pipeline(monkeypatch)
+
+        class FailingVideoRecorder:
+            def save_clip_async(self, filename_stem):
+                raise RuntimeError("camera not ready")
+
+        monkeypatch.setattr(server_module, "video_recorder", FailingVideoRecorder())
+        monkeypatch.setattr(server_module, "video_enabled", True)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            mode="mock",
+        )
+        on_shot_detected(shot)
+
+        assert shot.video_filename is None
 
 
 class TestMockLaunchMonitor:

@@ -3,6 +3,7 @@ import { useSocket } from './hooks/useSocket';
 import { ShotDisplay } from './components/ShotDisplay';
 import { StatsView } from './components/StatsView';
 import { ShotList } from './components/ShotList';
+import { ShotReplay } from './components/ShotReplay';
 import { DebugPanel } from './components/DebugPanel';
 import { CameraFeed } from './components/CameraFeed';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -26,7 +27,7 @@ import Logo from './logo/Logo';
 
 import './App.css';
 
-type View = 'live' | 'stats' | 'shots' | 'camera' | 'debug';
+type View = 'live' | 'stats' | 'shots' | 'replay' | 'camera' | 'debug';
 
 // Navigation icons as inline SVGs for better control
 const Icons = {
@@ -45,6 +46,11 @@ const Icons = {
   shots: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  replay: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <polygon points="5 3 19 12 5 21 5 3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   camera: (
@@ -237,6 +243,13 @@ function AppContent() {
           {shots.length > 0 && <span className="nav__badge">{shots.length}</span>}
         </button>
         <button
+          className={`nav__button ${currentView === 'replay' ? 'nav__button--active' : ''}`}
+          onClick={() => setCurrentView('replay')}
+        >
+          {Icons.replay}
+          <span>Replay</span>
+        </button>
+        <button
           className={`nav__button ${currentView === 'camera' ? 'nav__button--active' : ''} ${cameraStatus.streaming ? 'nav__button--streaming' : ''}`}
           onClick={() => setCurrentView('camera')}
         >
@@ -268,6 +281,7 @@ function AppContent() {
         )}
         {currentView === 'stats' && <StatsView shots={shots} onClearSession={clearSession} />}
         {currentView === 'shots' && <ShotList shots={shots} />}
+        {currentView === 'replay' && <ShotReplay shots={shots} />}
         {currentView === 'camera' && (
           <CameraFeed cameraStatus={cameraStatus} onToggleCamera={toggleCamera} onToggleStream={toggleCameraStream} />
         )}

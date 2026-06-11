@@ -53,6 +53,14 @@ camera = [
     # "picamera2>=0.3.0; sys_platform == 'linux'",
     # "inference-sdk>=0.9.0",  # Roboflow inference API
 ]
+# Shot replay video recording (Pi Camera Module 3).
+video = [
+    # picamera2 pulls in python-prctl, which requires libcap dev headers to
+    # build and breaks `uv run`/`uv sync` off-Pi. Install it via apt
+    # (python3-picamera2) with a --system-site-packages venv instead; see
+    # scripts/setup/setup.sh and docs/raspberry-pi-setup.md.
+    # "picamera2>=0.3.0; sys_platform == 'linux'",
+]
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",

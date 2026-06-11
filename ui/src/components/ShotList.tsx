@@ -3,6 +3,7 @@ import type { Shot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import type { UnitSystem } from '../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit } from '../utils/units';
+import { Pagination } from './Pagination';
 import './ShotList.css';
 
 const SHOTS_PER_PAGE = 5;
@@ -84,27 +85,7 @@ export function ShotList({ shots }: ShotListProps) {
         ))}
       </div>
 
-      {totalPages > 1 && (
-        <div className="pagination">
-          <button
-            className="pagination__button"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={page === 0}
-          >
-            Prev
-          </button>
-          <span className="pagination__info">
-            {page + 1} / {totalPages}
-          </span>
-          <button
-            className="pagination__button"
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            disabled={page === totalPages - 1}
-          >
-            Next
-          </button>
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

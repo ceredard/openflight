@@ -20,6 +20,8 @@ export interface Shot {
   spin_confidence: number | null;
   spin_quality: 'high' | 'medium' | 'low' | null;
   carry_spin_adjusted: number | null;
+  // Shot replay video clip (Pi Camera Module 3), relative to the server origin
+  video_url: string | null;
 }
 
 export interface SessionStats {

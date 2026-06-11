@@ -94,52 +94,6 @@
   color: var(--color-gold);
 }
 
-/* Pagination */
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-md);
-  padding-top: var(--space-md);
-  flex-shrink: 0;
-}
-
-.pagination__button {
-  padding: var(--space-sm) var(--space-lg);
-  background: transparent;
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: var(--radius-sm);
-  color: var(--color-gold);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: all var(--transition-smooth);
-  min-height: 42px;
-  min-width: 80px;
-  touch-action: manipulation;
-}
-
-.pagination__button:active:not(:disabled) {
-  transform: scale(0.95);
-  background: rgba(212, 175, 55, 0.1);
-}
-
-.pagination__button:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-  color: var(--text-muted);
-  border-color: rgba(245, 240, 230, 0.1);
-}
-
-.pagination__info {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  min-width: 3rem;
-  text-align: center;
-}
-
 /* Landscape 7" screen (800x480) */
 @media (max-height: 500px) {
   .shot-list__rows {
@@ -172,17 +126,5 @@
 
   .shot-row__stat {
     max-width: 4rem;
-  }
-
-  .pagination {
-    padding-top: var(--space-sm);
-    gap: var(--space-sm);
-  }
-
-  .pagination__button {
-    padding: var(--space-xs) var(--space-md);
-    min-height: 38px;
-    min-width: 70px;
-    font-size: 0.75rem;
   }
 }

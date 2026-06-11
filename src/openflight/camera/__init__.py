@@ -26,6 +26,11 @@ from .launch_angle import (
     LaunchAngleCalculator,
     LaunchAngles,
 )
+from .video_recorder import (
+    MockVideoRecorder,
+    VideoRecorder,
+    VideoRecorderConfig,
+)
 
 try:
     from .tracker import (
@@ -55,6 +60,10 @@ __all__ = [
     "LaunchAngleCalculator",
     "LaunchAngles",
     "CameraCalibration",
+    # Shot replay video recording
+    "VideoRecorder",
+    "MockVideoRecorder",
+    "VideoRecorderConfig",
 ]
 
 if _TRACKER_AVAILABLE:

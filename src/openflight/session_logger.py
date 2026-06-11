@@ -322,6 +322,7 @@ class SessionLogger:
         club_angle_deg: Optional[float] = None,
         club_path_deg: Optional[float] = None,
         spin_axis_deg: Optional[float] = None,
+        video_filename: Optional[str] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
     ):
@@ -355,6 +356,7 @@ class SessionLogger:
             spin_rejection_reason: Human-readable reason if spin was rejected
             carry_spin_adjusted: Carry distance adjusted for spin (rolling buffer mode only)
             mode: Radar mode ("rolling-buffer" or "mock")
+            video_filename: Replay clip filename, relative to the video directory
             impact_timestamp: Host epoch timestamp aligned to impact/OPS trigger time
         """
         if not self.enabled:
@@ -411,6 +413,8 @@ class SessionLogger:
             data["club_path_deg"] = club_path_deg
         if spin_axis_deg is not None:
             data["spin_axis_deg"] = spin_axis_deg
+        if video_filename is not None:
+            data["video_filename"] = video_filename
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
 

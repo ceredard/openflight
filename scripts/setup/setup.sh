@@ -58,6 +58,18 @@ else
     warn "Unknown platform: $OSTYPE"
 fi
 
+# Install system packages needed for shot replay video (Pi Camera Module 3)
+if [ "$PLATFORM" == "pi" ]; then
+    log "Installing system packages for shot replay video (ffmpeg, python3-picamera2)..."
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg python3-picamera2
+        log "Video recording system packages installed ✓"
+    else
+        warn "apt-get not found - install ffmpeg and python3-picamera2 manually for video recording"
+    fi
+fi
+
 # Check for Python 3.9+
 log "Checking Python version..."
 if command -v python3 &> /dev/null; then
@@ -108,8 +120,10 @@ fi
 # Create virtual environment
 log "Creating Python virtual environment..."
 if [ "$PLATFORM" == "pi" ]; then
-    python3 -m venv .venv
-    log "Created venv"
+    # --system-site-packages lets the venv see apt-installed picamera2/libcamera,
+    # which are required for shot replay video recording.
+    python3 -m venv .venv --system-site-packages
+    log "Created venv (with system site packages for picamera2)"
 else
     python3 -m venv .venv
     log "Created venv"
