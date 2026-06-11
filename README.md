@@ -242,6 +242,7 @@ uv run pytest tests/ -v
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
 - **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Spin measurement details
+- **[Dechirped-Sideband Spin Replay](docs/spin-dechirp-replay.md)** — Next-gen spin estimator test bench
 - **[K-LD7 Ball Detection Theory](docs/kld7-ball-detection-theory.md)** — How angle detection works
 - **[K-LD7 Session Review](docs/kld7-session-review.md)** — Offline review workflow for session JSONL files
 - **[Observability & Log Shipping](docs/observability.md)** — Ship logs to Grafana Cloud

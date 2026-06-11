@@ -25,6 +25,9 @@ Usage:
         --openflight session_logs/session_20260511_120001_range.jsonl \
         --comparison session_logs/comparison_test2.csv \
         --output session_logs/spin_dechirp_replay_test2.csv
+
+Full reference (requirements, pipeline, baseline results, next steps):
+docs/spin-dechirp-replay.md
 """
 
 from __future__ import annotations
