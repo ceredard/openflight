@@ -119,7 +119,8 @@ def build_connectors(
 ) -> List[SimConnector]:
     """Build every connector in a resolved config list."""
     return [
-        build_connector(cfg, on_status=on_status, on_inbound=on_inbound,
-                        backoff_seconds=backoff_seconds)
+        build_connector(
+            cfg, on_status=on_status, on_inbound=on_inbound, backoff_seconds=backoff_seconds
+        )
         for cfg in cfgs
     ]

@@ -203,6 +203,18 @@ while [[ $# -gt 0 ]]; do
             BALLISTICS=true
             shift
             ;;
+        --gspro)
+            GSPRO="$2"
+            shift 2
+            ;;
+        --opengolfsim)
+            OPENGOLFSIM="$2"
+            shift 2
+            ;;
+        --no-sim)
+            NO_SIM=true
+            shift
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -328,6 +340,19 @@ fi
 
 if [ "$BALLISTICS" = true ]; then
     SERVER_CMD="$SERVER_CMD --ballistics"
+fi
+
+# Simulator connectors (also configurable via config/sim.json without flags)
+if [ -n "$GSPRO" ]; then
+    SERVER_CMD="$SERVER_CMD --gspro $GSPRO"
+fi
+
+if [ -n "$OPENGOLFSIM" ]; then
+    SERVER_CMD="$SERVER_CMD --opengolfsim $OPENGOLFSIM"
+fi
+
+if [ "$NO_SIM" = true ]; then
+    SERVER_CMD="$SERVER_CMD --no-sim"
 fi
 
 if [ -n "$TRIGGER" ]; then
