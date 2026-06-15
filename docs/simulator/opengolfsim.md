@@ -163,9 +163,10 @@ OpenGolfSim. The id/name mapping lives in
 > changed** in the sim. OpenGolfSim's own connection example shows no subscribe
 > step and doesn't demonstrate receiving player updates, so club sync from the
 > sim may not be functional in current builds. OpenFlight's parser is ready for
-> the documented `player` shape the moment OGS sends one — capture it with
-> `OPENFLIGHT_SIM_LOG_RAW=1` (or `scripts/probe_sim.py`) and, if the format
-> differs, the mapping is a quick fix. Until then, **set the club in
+> the documented `player` shape the moment OGS sends one — capture it by
+> launching the server with `OPENFLIGHT_SIM_LOG_RAW=1` (logs inbound frames
+> verbatim) and, if the format differs, the mapping is a quick fix. Until then,
+> **set the club in
 > OpenFlight's own picker**; outbound shots are unaffected.
 >
 > The message *shape* we parse matches OpenGolfSim's documented `player` event,
