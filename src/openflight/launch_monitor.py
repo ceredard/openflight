@@ -247,6 +247,9 @@ class Shot:
     impact_timestamp: Optional[float] = None
     impact_timestamp_kld7: Optional[float] = None
     club_speed_mph: Optional[float] = None
+    # Raw OPS radial ball speed, kept when the cosine correction rewrites
+    # ball_speed_mph (radar bin anchoring must keep using the radial value)
+    ball_speed_raw_mph: Optional[float] = None
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
     club: ClubType = ClubType.DRIVER
@@ -259,6 +262,10 @@ class Shot:
     launch_angle_horizontal_source: Optional[str] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
+    # Raw radar-measured spin, kept when --calculated-spin rewrites
+    # spin_rpm with the kinematic estimate (for offline scoring)
+    spin_rpm_measured: Optional[float] = None
+    spin_source: Optional[str] = None  # "measured", "calculated", or None
     spin_result_quality: Optional[str] = None
     spin_snr: Optional[float] = None
     spin_modulation_depth: Optional[float] = None
