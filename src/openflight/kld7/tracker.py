@@ -193,6 +193,11 @@ class KLD7Tracker:
 
     def _init_ring_buffer(self):
         """Initialize or reset the ring buffer."""
+        # Guards the buffer against the stream thread appending while the
+        # shot path iterates it (deque iteration raises RuntimeError if the
+        # deque is mutated mid-iteration). Readers copy under the lock and
+        # do any per-frame work on the copy.
+        self._buffer_lock = threading.Lock()
         self._ring_buffer: deque[KLD7Frame] = deque(maxlen=self.max_buffer_frames)
 
     def connect(self) -> bool:
@@ -525,7 +530,8 @@ class KLD7Tracker:
 
     def _add_frame(self, frame: KLD7Frame):
         """Add a frame to the ring buffer."""
-        self._ring_buffer.append(frame)
+        with self._buffer_lock:
+            self._ring_buffer.append(frame)
 
     def _radc_frames_for_extraction(
         self,
@@ -538,6 +544,8 @@ class KLD7Tracker:
         time when a shot timestamp is available so stale frames from prior
         movement cannot influence this shot's angle.
         """
+        with self._buffer_lock:
+            buffered = list(self._ring_buffer)
         frames = [
             {
                 "timestamp": f.timestamp,
@@ -546,7 +554,7 @@ class KLD7Tracker:
                 "complete_timestamp": f.complete_timestamp,
                 "read_duration_ms": f.read_duration_ms,
             }
-            for f in self._ring_buffer
+            for f in buffered
             if f.radc is not None
         ]
         frames_available = len(frames)
@@ -825,8 +833,10 @@ class KLD7Tracker:
         Call this BEFORE get_angle_for_shot/reset to capture raw data
         for offline analysis alongside OPS243 shot data.
         """
+        with self._buffer_lock:
+            buffered = list(self._ring_buffer)
         frames = []
-        for frame in self._ring_buffer:
+        for frame in buffered:
             entry = {"timestamp": frame.timestamp}
             if frame.arrival_timestamp is not None:
                 entry["arrival_timestamp"] = frame.arrival_timestamp
@@ -845,4 +855,5 @@ class KLD7Tracker:
 
     def reset(self):
         """Clear the ring buffer after a shot is processed."""
-        self._ring_buffer.clear()
+        with self._buffer_lock:
+            self._ring_buffer.clear()

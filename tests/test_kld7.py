@@ -2,6 +2,7 @@
 
 import pickle
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -417,6 +418,47 @@ class TestKLD7TrackerRingBuffer:
         snap = tracker.snapshot_buffer()
         assert len(snap) == 1
         assert "has_radc" not in snap[0]
+
+    def test_buffer_reads_are_safe_during_concurrent_appends(self):
+        """Stream-thread appends must not corrupt shot-path buffer reads.
+
+        The K-LD7 stream thread appends frames at ~34 Hz while the shot
+        path iterates the same ring buffer (snapshot_buffer and
+        _radc_frames_for_extraction). Without synchronization, CPython
+        raises ``RuntimeError: deque mutated during iteration``; the
+        server's broad exception handler swallows it and the shot
+        silently loses its launch angle.
+        """
+        tracker = self._make_tracker()
+        payload = b"\x00" * 3072
+        now = time.time()
+        # Fill to maxlen so every append also evicts (production steady
+        # state once the stream has run for buffer_seconds).
+        for i in range(tracker.max_buffer_frames):
+            tracker._add_frame(KLD7Frame(timestamp=now + i * 0.03, radc=payload))
+
+        stop = threading.Event()
+
+        def writer():
+            i = tracker.max_buffer_frames
+            while not stop.is_set():
+                tracker._add_frame(KLD7Frame(timestamp=now + i * 0.03, radc=payload))
+                i += 1
+
+        thread = threading.Thread(target=writer, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                # Both reader paths the shot pipeline uses.
+                snap = tracker.snapshot_buffer()
+                assert len(snap) <= tracker.max_buffer_frames
+                frames, _, _ = tracker._radc_frames_for_extraction(shot_timestamp=now)
+                assert len(frames) <= tracker.max_buffer_frames
+        finally:
+            stop.set()
+            thread.join(timeout=5.0)
+        assert not thread.is_alive()
 
     def test_returns_none_when_no_detections(self):
         tracker = self._make_tracker()
