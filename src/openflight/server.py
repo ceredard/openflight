@@ -27,15 +27,13 @@ from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_f
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
     IncompleteShotError,
+    PlayerState as SimPlayerState,
     PlayerUpdate,
     ShotAck,
     SimError,
     build_connectors,
     load_sim_config,
     resolve_shot,
-)
-from .sim import (
-    PlayerState as SimPlayerState,
 )
 
 # Configure logging
@@ -1531,6 +1529,10 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
         if not connector.is_connected():
             continue
         try:
+            # Sends are synchronous on this thread, in connector order. Local sims
+            # (the only target today) ack in microseconds; if a remote or laggy sim
+            # is ever added, move this behind a per-connector send queue so one slow
+            # sim can't stall delivery to the others (PR #115 review #2).
             connector.send_shot(resolved)
         except OSError as e:
             logger.warning("[sim] %s send failed: %s", connector.name, e)

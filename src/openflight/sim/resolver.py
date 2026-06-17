@@ -105,6 +105,10 @@ def resolve_shot(shot: Shot, player_state: PlayerState) -> ResolvedShot:
     provenance["side_spin"] = derived_prov
 
     carry = float(shot.estimated_carry_yards)
+    # Carry is always model-derived (never directly observed), so "measured" here
+    # means launch-angle-informed: the carry model was driven by a measured launch
+    # angle rather than falling back to club-type defaults. The UI badge reflects
+    # that distinction, not a claim that carry itself was measured (PR #115 review #6).
     provenance["carry"] = "measured" if shot.has_launch_angle else "estimated"
 
     if shot.club_speed_mph is not None and shot.club_speed_mph > 0:
