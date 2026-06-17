@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SimShotInfo } from '../hooks/useSocket';
+import type { SimShotInfo } from '../types/socket';
 import { SimShotBadges } from './SimShotBadges';
 
 const gsproShot: SimShotInfo = {

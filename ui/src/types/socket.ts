@@ -5,6 +5,32 @@ export interface DebugReading {
   timestamp: string;
 }
 
+export type SimState =
+  | 'connected'
+  | 'connecting'
+  | 'reconnecting'
+  | 'disabled'
+  | 'stopped'
+  | 'error';
+
+export interface SimStatus {
+  target: string;
+  state: SimState;
+  host?: string;
+  port?: number;
+  message?: string;
+  attempt?: number;
+  next_retry_in_s?: number;
+}
+
+export interface SimShotInfo {
+  target: string;
+  shot_number: number;
+  fields: string[];
+  values: Record<string, number | null>;
+  provenance: Record<string, 'measured' | 'estimated'>;
+}
+
 export interface RadarConfig {
   min_speed: number;
   max_speed: number;

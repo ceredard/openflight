@@ -1,5 +1,5 @@
 import './SimStatus.css';
-import type { SimStatus as SimStatusData } from '../hooks/useSocket';
+import type { SimStatus as SimStatusData } from '../types/socket';
 
 const DISPLAY_NAMES: Record<string, string> = {
   gspro: 'GSPro',
