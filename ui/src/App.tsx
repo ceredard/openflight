@@ -6,6 +6,8 @@ import { ShotList } from './components/ShotList';
 import { DebugPanel } from './components/DebugPanel';
 import { CameraFeed } from './components/CameraFeed';
 import { ConnectionStatus } from './components/ConnectionStatus';
+import { SimStatus } from './components/SimStatus';
+import { SimShotBadges } from './components/SimShotBadges';
 import { ClubPicker } from './components/ClubPicker';
 import { ClubSelectScreen } from './components/ClubSelectScreen';
 import { BallDetectionIndicator } from './components/BallDetectionIndicator';
@@ -65,6 +67,9 @@ function AppContent() {
     connected,
     mockMode,
     debugMode,
+    simStatuses,
+    latestSimShots,
+    serverClub,
     debugReadings,
     debugShotLogs,
     radarConfig,
@@ -85,6 +90,15 @@ function AppContent() {
 
   const [currentView, setCurrentView] = useState<View>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
+  // Reflect a server-pushed club change (e.g. the club changed in the connected
+  // simulator) in the local picker, without echoing back to the server. Done
+  // during render (React's "adjust state when an input changes" pattern) rather
+  // than in an effect, which avoids a cascading-render lint error.
+  const [appliedServerClub, setAppliedServerClub] = useState<string | null>(null);
+  if (serverClub && serverClub !== appliedServerClub) {
+    setAppliedServerClub(serverClub);
+    setSelectedClub(serverClub);
+  }
   // Shown on every app load so the user confirms their club before the first
   // shot (skippable, keeps the default). The /display route returns early
   // below, so this interstitial never appears in the passive TV view.
@@ -183,6 +197,7 @@ function AppContent() {
             confidence={cameraStatus.ball_confidence}
             onToggle={toggleCamera}
           />
+          <SimStatus statuses={simStatuses} />
           <ConnectionStatus connected={connected} />
           <button
             className="power-button"
@@ -259,6 +274,7 @@ function AppContent() {
           <div className="live-view">
             {isNewShot && <div key={shotVersion} className="shot-flash" />}
             <ShotDisplay key={shotVersion} shot={latestShot} animate={isNewShot} />
+            {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
             {mockMode && (
               <button className="simulate-button" onClick={simulateShot}>
                 Simulate Shot

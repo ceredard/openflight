@@ -13,6 +13,32 @@ export interface DebugReading {
   timestamp: string;
 }
 
+export type SimState =
+  | 'connected'
+  | 'connecting'
+  | 'reconnecting'
+  | 'disabled'
+  | 'stopped'
+  | 'error';
+
+export interface SimStatus {
+  target: string;
+  state: SimState;
+  host?: string;
+  port?: number;
+  message?: string;
+  attempt?: number;
+  next_retry_in_s?: number;
+}
+
+export interface SimShotInfo {
+  target: string;
+  shot_number: number;
+  fields: string[];
+  values: Record<string, number | null>;
+  provenance: Record<string, 'measured' | 'estimated'>;
+}
+
 export interface RadarConfig {
   min_speed: number;
   max_speed: number;
@@ -66,6 +92,11 @@ export function useSocket() {
   const [connected, setConnected] = useState(false);
   const [mockMode, setMockMode] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  // Simulator connectors, keyed by target name (e.g. 'gspro', 'opengolfsim').
+  const [simStatuses, setSimStatuses] = useState<Record<string, SimStatus>>({});
+  const [latestSimShots, setLatestSimShots] = useState<Record<string, SimShotInfo>>({});
+  // Club pushed by the server (e.g. a simulator changed the current club).
+  const [serverClub, setServerClub] = useState<string | null>(null);
   const [debugReadings, setDebugReadings] = useState<DebugReading[]>([]);
   const [debugShotLogs, setDebugShotLogs] = useState<DebugShotLog[]>([]);
   const [radarConfig, setRadarConfig] = useState<RadarConfig>({
@@ -113,6 +144,28 @@ export function useSocket() {
 
     newSocket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {
       addShotRef.current(data.shot);
+    });
+
+    // Simulator connector events (generic across GSPro / OpenGolfSim / future sims)
+    newSocket.on('sim_status', (data: SimStatus) => {
+      setSimStatuses((prev) => ({ ...prev, [data.target]: data }));
+    });
+
+    newSocket.on('sim_shot', (data: SimShotInfo) => {
+      setLatestSimShots((prev) => ({ ...prev, [data.target]: data }));
+    });
+
+    newSocket.on('sim_send_failed', (data: { target: string; reason: string }) => {
+      console.warn(`Sim send failed (${data.target}): ${data.reason}`);
+    });
+
+    newSocket.on('sim_shot_dropped', (data: { reason: string }) => {
+      console.warn(`Sim shot dropped: ${data.reason}`);
+    });
+
+    // Server pushed a club change (from a simulator, or echoing a local set).
+    newSocket.on('club_changed', (data: { club: string }) => {
+      setServerClub(data.club);
     });
 
     newSocket.on(
@@ -256,6 +309,9 @@ export function useSocket() {
     connected,
     mockMode,
     debugMode,
+    simStatuses,
+    latestSimShots,
+    serverClub,
     debugReadings,
     debugShotLogs,
     radarConfig,
