@@ -1,5 +1,5 @@
 import './SimShotBadges.css';
-import type { SimShotInfo } from '../hooks/useSocket';
+import type { SimShotInfo } from '../types/socket';
 
 const DISPLAY_NAMES: Record<string, string> = {
   gspro: 'GSPro',

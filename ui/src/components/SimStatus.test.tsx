@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SimStatus as SimStatusData } from '../hooks/useSocket';
+import type { SimStatus as SimStatusData } from '../types/socket';
 import { SimStatus } from './SimStatus';
 
 describe('SimStatus', () => {

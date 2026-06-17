@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
+import { useSystemStore } from './stores/useSystemStore';
+import { useShotStore } from './stores/useShotStore';
+import { useCameraStore } from './stores/useCameraStore';
+import { useDebugStore } from './stores/useDebugStore';
+import { socketService } from './services/socketService';
 import { ShotDisplay } from './components/ShotDisplay';
 import { StatsView } from './components/StatsView';
 import { ShotList } from './components/ShotList';
@@ -13,15 +19,11 @@ import { ClubSelectScreen } from './components/ClubSelectScreen';
 import { BallDetectionIndicator } from './components/BallDetectionIndicator';
 import { DisplayMode } from './components/DisplayMode';
 import {
-  LaunchDaddyProvider,
   useLaunchDaddy,
   LaunchDaddyOverlay,
   LaunchDaddyBrand,
   LaunchDaddySecretIndicator,
 } from './components/LaunchDaddy';
-import { ShotProvider } from './state/ShotProvider';
-import { UnitPreferenceProvider } from './state/UnitPreferenceProvider';
-import { useShotContext } from './state/useShotContext';
 import { useUnitPreference } from './state/useUnitPreference';
 
 import Logo from './logo/Logo';
@@ -63,30 +65,35 @@ const Icons = {
 };
 
 function AppContent() {
-  const {
-    connected,
-    mockMode,
-    debugMode,
-    simStatuses,
-    latestSimShots,
-    serverClub,
-    debugReadings,
-    debugShotLogs,
-    radarConfig,
-    cameraStatus,
-    triggerDiagnostics,
-    triggerStatus,
-    clearSession,
-    setClub,
-    simulateShot,
-    toggleDebug,
-    updateRadarConfig,
-    toggleCamera,
-    toggleCameraStream,
-    shutdown,
-  } = useSocket();
-
-  const { latestShot, shots, isNewShot, shotVersion } = useShotContext();
+  const { shutdown } = useSocket();
+  const { connected, mockMode, debugMode, simStatuses, latestSimShots, serverClub } = useSystemStore(
+    useShallow((state) => ({
+      connected: state.connected,
+      mockMode: state.mockMode,
+      debugMode: state.debugMode,
+      simStatuses: state.simStatuses,
+      latestSimShots: state.latestSimShots,
+      serverClub: state.serverClub,
+    })),
+  );
+  const { latestShot, shots, isNewShot, shotVersion } = useShotStore(
+    useShallow((state) => ({
+      latestShot: state.latestShot,
+      shots: state.shots,
+      isNewShot: state.isNewShot,
+      shotVersion: state.shotVersion,
+    })),
+  );
+  const cameraStatus = useCameraStore((state) => state.cameraStatus);
+  const { debugReadings, debugShotLogs, radarConfig, triggerDiagnostics, triggerStatus } = useDebugStore(
+    useShallow((state) => ({
+      debugReadings: state.debugReadings,
+      debugShotLogs: state.debugShotLogs,
+      radarConfig: state.radarConfig,
+      triggerDiagnostics: state.triggerDiagnostics,
+      triggerStatus: state.triggerStatus,
+    })),
+  );
 
   const [currentView, setCurrentView] = useState<View>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
@@ -119,7 +126,7 @@ function AppContent() {
 
   const handleClubChange = (club: string) => {
     setSelectedClub(club);
-    setClub(club);
+    socketService.setClub(club);
   };
 
   if (isDisplayRoute) {
@@ -195,7 +202,7 @@ function AppContent() {
             enabled={cameraStatus.enabled}
             detected={cameraStatus.ball_detected}
             confidence={cameraStatus.ball_confidence}
-            onToggle={toggleCamera}
+            onToggle={() => socketService.toggleCamera()}
           />
           <SimStatus statuses={simStatuses} />
           <ConnectionStatus connected={connected} />
@@ -276,16 +283,16 @@ function AppContent() {
             <ShotDisplay key={shotVersion} shot={latestShot} animate={isNewShot} />
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
             {mockMode && (
-              <button className="simulate-button" onClick={simulateShot}>
+              <button className="simulate-button" onClick={() => socketService.simulateShot()}>
                 Simulate Shot
               </button>
             )}
           </div>
         )}
-        {currentView === 'stats' && <StatsView shots={shots} onClearSession={clearSession} />}
+        {currentView === 'stats' && <StatsView shots={shots} onClearSession={() => socketService.clearSession()} />}
         {currentView === 'shots' && <ShotList shots={shots} />}
         {currentView === 'camera' && (
-          <CameraFeed cameraStatus={cameraStatus} onToggleCamera={toggleCamera} onToggleStream={toggleCameraStream} />
+          <CameraFeed cameraStatus={cameraStatus} onToggleCamera={() => socketService.toggleCamera()} onToggleStream={() => socketService.toggleCameraStream()} />
         )}
         {currentView === 'debug' && (
           <DebugPanel
@@ -295,8 +302,8 @@ function AppContent() {
             radarConfig={radarConfig}
             cameraStatus={cameraStatus}
             mockMode={mockMode}
-            onToggle={toggleDebug}
-            onUpdateConfig={updateRadarConfig}
+            onToggle={() => socketService.toggleDebug()}
+            onUpdateConfig={(config) => socketService.setRadarConfig(config)}
             triggerDiagnostics={triggerDiagnostics}
             triggerStatus={triggerStatus}
           />
@@ -307,15 +314,7 @@ function AppContent() {
 }
 
 function App() {
-  return (
-    <LaunchDaddyProvider>
-      <UnitPreferenceProvider>
-        <ShotProvider>
-          <AppContent />
-        </ShotProvider>
-      </UnitPreferenceProvider>
-    </LaunchDaddyProvider>
-  );
+  return <AppContent />;
 }
 
 export default App;
