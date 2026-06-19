@@ -147,11 +147,32 @@ if ! command -v uv &> /dev/null; then
     export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 fi
 
+# picamera2 (Camera Module 3 shot video recording) binds to the system
+# libcamera stack and must come from apt, not pip - install it here so the
+# venv below can be created with --system-site-packages to see it.
+if [ "$PLATFORM" == "pi" ]; then
+    log "Installing picamera2 (Camera Module 3 video recording) via apt..."
+    if sudo apt install -y python3-picamera2; then
+        log "python3-picamera2 installed ✓"
+    else
+        warn "Failed to install python3-picamera2 - shot video recording (--record-video) will be unavailable"
+    fi
+fi
+
 # Create virtual environment
 if [ ! -d .venv ]; then
     log "Creating Python virtual environment..."
-    python3 -m venv .venv
+    if [ "$PLATFORM" == "pi" ]; then
+        # --system-site-packages lets the venv see apt-installed picamera2
+        python3 -m venv .venv --system-site-packages
+    else
+        python3 -m venv .venv
+    fi
     log "Created venv"
+elif [ "$PLATFORM" == "pi" ] && ! grep -q "include-system-site-packages = true" .venv/pyvenv.cfg 2>/dev/null; then
+    warn "Existing .venv was created without --system-site-packages, so it can't see"
+    warn "the apt-installed picamera2 - shot video recording (--record-video) will be unavailable."
+    warn "To fix: rm -rf .venv && ./scripts/setup/setup.sh"
 fi
 
 # Activate venv
@@ -328,6 +349,11 @@ echo "    ./scripts/start-kiosk.sh                # Default: rolling buffer + so
 echo "    ./scripts/start-kiosk.sh --kld7         # With K-LD7 angle radars"
 echo "    ./scripts/start-kiosk.sh --mock         # Mock mode (no hardware)"
 echo ""
+if [ "$PLATFORM" == "pi" ]; then
+    log "Shot video recording (Camera Module 3 Wide, opt-in):"
+    echo "    ./scripts/start-kiosk.sh --record-video"
+    echo ""
+fi
 log "Then open http://localhost:8080 (or use the touchscreen)."
 echo ""
 log "Cloud sync (optional):"

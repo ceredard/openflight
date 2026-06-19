@@ -46,6 +46,10 @@ BALLISTICS=false
 SIM=false
 CALCULATED_SPIN=false
 BALL_SPEED_COSINE=false
+RECORD_VIDEO=false
+RECORD_WIDTH=""
+RECORD_HEIGHT=""
+RECORD_FPS=""
 
 # Buffer split presets (pre/post trigger segments out of 32 total)
 # At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
@@ -218,6 +222,22 @@ while [[ $# -gt 0 ]]; do
             BALL_SPEED_COSINE=true
             shift
             ;;
+        --record-video)
+            RECORD_VIDEO=true
+            shift
+            ;;
+        --record-width)
+            RECORD_WIDTH="$2"
+            shift 2
+            ;;
+        --record-height)
+            RECORD_HEIGHT="$2"
+            shift 2
+            ;;
+        --record-fps)
+            RECORD_FPS="$2"
+            shift 2
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -356,6 +376,13 @@ fi
 
 if [ "$BALL_SPEED_COSINE" = true ]; then
     SERVER_CMD="$SERVER_CMD --ball-speed-cosine-correction"
+fi
+
+if [ "$RECORD_VIDEO" = true ]; then
+    SERVER_CMD="$SERVER_CMD --record-video"
+    [ -n "$RECORD_WIDTH" ] && SERVER_CMD="$SERVER_CMD --record-width $RECORD_WIDTH"
+    [ -n "$RECORD_HEIGHT" ] && SERVER_CMD="$SERVER_CMD --record-height $RECORD_HEIGHT"
+    [ -n "$RECORD_FPS" ] && SERVER_CMD="$SERVER_CMD --record-fps $RECORD_FPS"
 fi
 
 if [ -n "$TRIGGER" ]; then
@@ -523,6 +550,10 @@ if [ "$BALLISTICS" = true ]; then
     log "Ballistic carry model enabled (simulator + drag/Magnus)"
 else
     log "Ballistic carry model disabled (using legacy table)"
+fi
+
+if [ "$RECORD_VIDEO" = true ]; then
+    log "Shot video recording enabled (Camera Module 3 Wide)"
 fi
 
 uv run $SERVER_CMD &

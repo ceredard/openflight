@@ -53,6 +53,11 @@ camera = [
     # "picamera2>=0.3.0; sys_platform == 'linux'",
     # "inference-sdk>=0.9.0",  # Roboflow inference API
 ]
+# Note: shot video recording (camera/recorder.py, --record-video) also needs
+# picamera2, but it is NOT a pip dependency here. On a Pi, picamera2 binds to
+# the system libcamera stack and must come from apt (`python3-picamera2`),
+# with the venv created using --system-site-packages so it's visible. See
+# scripts/setup/setup.sh, which handles this automatically.
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",

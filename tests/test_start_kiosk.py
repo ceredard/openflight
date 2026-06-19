@@ -97,6 +97,41 @@ def test_kld7_geometry_preset_preserves_explicit_overrides():
     assert "--kld7-ball-distance 4.75" in command
     assert "--kld7-angle-offset 2.5" not in command
     assert "--kld7-mount-tilt 10" not in command
+
+
+def test_record_video_off_by_default():
+    """Shot video recording should be opt-in, like the other hardware flags."""
+    result = _dry_run()
+    command = result.stdout.strip()
+    assert "--record-video" not in command
+
+
+def test_record_video_forwards_quality_flags():
+    result = _dry_run(
+        "--record-video",
+        "--record-width",
+        "1280",
+        "--record-height",
+        "720",
+        "--record-fps",
+        "30",
+    )
+    command = result.stdout.strip()
+
+    assert "--record-video" in command
+    assert "--record-width 1280" in command
+    assert "--record-height 720" in command
+    assert "--record-fps 30" in command
+
+
+def test_record_video_omits_unset_quality_flags():
+    result = _dry_run("--record-video")
+    command = result.stdout.strip()
+
+    assert "--record-video" in command
+    assert "--record-width" not in command
+    assert "--record-height" not in command
+    assert "--record-fps" not in command
     assert "--kld7-ball-distance 5" not in command
 
 
