@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import re
 import statistics
 import sys
 import threading
@@ -16,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from flask import Flask, Response, send_from_directory
+from flask import Flask, Response, abort, send_file, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -62,6 +63,8 @@ try:
     PICAMERA_AVAILABLE = True
 except ImportError:
     PICAMERA_AVAILABLE = False
+
+from .camera.recorder import MockShotVideoRecorder, RecorderConfig, ShotVideoRecorder
 
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIST_DIR), static_url_path="")
@@ -118,6 +121,15 @@ camera_enabled: bool = False
 camera_streaming: bool = False
 camera_thread: Optional[threading.Thread] = None
 camera_stop_event: Optional[threading.Event] = None
+
+# Shot video recorder state (dedicated Camera Module 3 Wide, separate from the
+# ball-tracking camera above).
+shot_recorder: Optional[ShotVideoRecorder] = None
+shot_recorder_enabled: bool = False
+
+# Matches session_logger's "session_<timestamp>_<location>" naming, used to
+# validate session_id path segments before serving video files.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 ball_detected: bool = False
 ball_detection_confidence: float = 0.0
 latest_frame: Optional[bytes] = None
@@ -960,6 +972,33 @@ def init_camera(
         return False
 
 
+def init_shot_recorder(mock: bool = False, config: Optional[RecorderConfig] = None) -> bool:
+    """Initialize the dedicated shot video recorder (Camera Module 3 Wide).
+
+    This is a separate camera from the Hough/YOLO ball-tracking camera
+    above - it only records video clips, it does not feed launch-angle
+    detection.
+    """
+    global shot_recorder, shot_recorder_enabled  # pylint: disable=global-statement
+
+    recorder_cls = MockShotVideoRecorder if mock else ShotVideoRecorder
+
+    if not mock and not PICAMERA_AVAILABLE:
+        print("picamera2 not available - shot video recording disabled")
+        return False
+
+    try:
+        shot_recorder = recorder_cls(config)
+        shot_recorder.start()
+        shot_recorder_enabled = True
+        return True
+    except Exception as e:
+        print(f"Failed to initialize shot video recorder: {e}")
+        shot_recorder = None
+        shot_recorder_enabled = False
+        return False
+
+
 def init_kld7(
     port=None,
     orientation="vertical",
@@ -1142,6 +1181,23 @@ def camera_stream():
         return "Camera not available", 503
 
     return Response(generate_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/api/shots/<session_id>/<int:shot_number>/video")
+def shot_video(session_id: str, shot_number: int):
+    """Serve a saved shot video clip, with HTTP range support for seeking."""
+    if not _SESSION_ID_RE.match(session_id):
+        abort(400)
+
+    session_log = get_session_logger()
+    if not session_log or not session_log.log_dir:
+        abort(404)
+
+    video_path = session_log.log_dir / "videos" / session_id / f"shot_{shot_number:04d}.mp4"
+    if not video_path.is_file():
+        abort(404)
+
+    return send_file(video_path, conditional=True, mimetype="video/mp4")
 
 
 @socketio.on("toggle_camera")
@@ -1687,6 +1743,39 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     return True
 
 
+def _save_shot_video(shot_number: int, session_log) -> None:
+    """Background-thread target: save the pre/post-roll clip for a shot.
+
+    Runs off the socket thread because save_clip() blocks for post_roll_s
+    while the post-impact footage finishes recording.
+    """
+    try:
+        video_dir = session_log.log_dir / "videos" / session_log.session_id
+        video_path = video_dir / f"shot_{shot_number:04d}.mp4"
+        shot_recorder.save_clip(video_path)
+
+        duration_s = shot_recorder.config.pre_roll_s + shot_recorder.config.post_roll_s
+        relative_path = str(video_path.relative_to(session_log.log_dir)).replace("\\", "/")
+        session_log.log_shot_video(shot_number, relative_path, duration_s)
+
+        socketio.emit(
+            "shot_video_ready",
+            {
+                "shot_number": shot_number,
+                "video_path": relative_path,
+                "session_id": session_log.session_id,
+            },
+        )
+    except Exception as e:
+        logger.warning("[SERVER] Failed to save shot video: %s", e, exc_info=True)
+        log_session_error(
+            "Shot video save failed",
+            component="server",
+            context={"stage": "shot_video", "shot_number": shot_number},
+            exc=e,
+        )
+
+
 def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
@@ -2109,9 +2198,22 @@ def on_shot_detected(shot: Shot):
             exc=e,
         )
 
+    # Save a video clip for this shot. Runs in the background since the
+    # post-roll window takes ~2s to finish - the shot must still appear in
+    # the UI immediately, with a "shot_video_ready" event following later.
+    if shot_recorder_enabled and shot_recorder and session_log and shot.mode != "mock":
+        shot_number = session_log.stats.get("shots_detected", 0)
+        threading.Thread(
+            target=_save_shot_video,
+            args=(shot_number, session_log),
+            daemon=True,
+        ).start()
+
     # Emit shot with launch angle data included
     try:
         shot_data = shot_to_dict(shot)
+        if session_log:
+            shot_data["shot_number"] = session_log.stats.get("shots_detected")
         stats = monitor.get_session_stats() if monitor else {}
         socketio.emit("shot", {"shot": shot_data, "stats": stats})
 
@@ -2563,6 +2665,21 @@ def main():
         "--roboflow-api-key", help="Roboflow API key (can also use ROBOFLOW_API_KEY env var)"
     )
     parser.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record a video clip of each shot using a dedicated Camera Module 3 Wide "
+        "(separate from the ball-tracking camera above). Off by default.",
+    )
+    parser.add_argument(
+        "--record-width", type=int, default=1332, help="Shot video width in pixels (default 1332)"
+    )
+    parser.add_argument(
+        "--record-height", type=int, default=990, help="Shot video height in pixels (default 990)"
+    )
+    parser.add_argument(
+        "--record-fps", type=int, default=50, help="Shot video framerate (default 50)"
+    )
+    parser.add_argument(
         "--session-location",
         "-l",
         default="range",
@@ -2862,6 +2979,20 @@ def main():
             print("Camera not available - running without camera")
     else:
         print("Camera disabled by --no-camera flag")
+
+    if args.record_video:
+        recorder_config = RecorderConfig(
+            width=args.record_width,
+            height=args.record_height,
+            framerate=args.record_fps,
+        )
+        if init_shot_recorder(mock=args.mock, config=recorder_config):
+            print(
+                f"Shot video recording enabled ({args.record_width}x{args.record_height}"
+                f"@{args.record_fps}fps)"
+            )
+        else:
+            print("Shot video recorder not available - running without video recording")
 
     if experimental_kld7_raw_radc_logging:
         print("Experimental K-LD7 raw RADC payload logging enabled")

@@ -25,6 +25,9 @@ CLIENT_VERSION = __version__
 # (see session_logger.py), while the server spec names ``session_error``;
 # keeping both is privacy-safe (error entries carry only error strings/context,
 # never raw ADC) and future-proofs a rename.
+#
+# ``shot_video`` is intentionally NOT included: saved shot clips (see
+# camera/recorder.py) stay local-only and are never uploaded.
 KEEP_ENTRY_TYPES = frozenset(
     {
         "session_start",

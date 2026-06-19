@@ -59,6 +59,7 @@ class SessionLogger:
     - reading_accepted: Reading that passed all filters
     - shot_detected: A shot was recorded
     - shot_camera: Camera tracking data for a shot
+    - shot_video: Saved video clip path for a shot
     - config_change: Radar configuration changed
     - error: Processing failures (component, context, optional exception metadata)
     """
@@ -455,6 +456,25 @@ class SessionLogger:
                 "confidence": confidence,
                 "positions_tracked": positions_tracked,
                 "launch_detected": launch_detected,
+            },
+        )
+
+    def log_shot_video(self, shot_number: int, video_path: str, duration_s: float):
+        """Log the saved video clip path for a shot.
+
+        video_path is stored relative to log_dir so sessions remain portable
+        across machines. Intentionally not part of cloud sync's allowlist -
+        see cloud/filtering.py KEEP_ENTRY_TYPES.
+        """
+        if not self.enabled:
+            return
+
+        self._write_entry(
+            "shot_video",
+            {
+                "shot_number": shot_number,
+                "video_path": video_path,
+                "duration_s": duration_s,
             },
         )
 

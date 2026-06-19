@@ -1,4 +1,9 @@
 export interface Shot {
+  // 1-based shot count within the session (used to correlate the
+  // shot_video_ready event back to this shot); undefined if logging is off.
+  shot_number?: number;
+  video_path?: string;
+  session_id?: string;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;

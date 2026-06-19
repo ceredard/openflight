@@ -3,6 +3,7 @@ import type { Shot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import type { UnitSystem } from '../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit } from '../utils/units';
+import { ShotDetail } from './ShotDetail';
 import './ShotList.css';
 
 const SHOTS_PER_PAGE = 5;
@@ -16,11 +17,18 @@ interface ShotRowProps {
   shotNumber: number;
   unitSystem: UnitSystem;
   distanceUnit: string;
+  onSelect: (shot: Shot) => void;
 }
 
-const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem, distanceUnit }: ShotRowProps) {
+const ShotRow = memo(function ShotRow({
+  shot,
+  shotNumber,
+  unitSystem,
+  distanceUnit,
+  onSelect,
+}: ShotRowProps) {
   return (
-    <div className="shot-row">
+    <div className="shot-row" onClick={() => onSelect(shot)} role="button" tabIndex={0}>
       <span className="shot-row__number">#{shotNumber}</span>
       <span className="shot-row__club">{shot.club}</span>
       <span className="shot-row__stat">
@@ -49,6 +57,7 @@ const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem, distanceUn
 
 export function ShotList({ shots }: ShotListProps) {
   const [page, setPage] = useState(0);
+  const [selectedShot, setSelectedShot] = useState<Shot | null>(null);
   const { unitSystem } = useUnitPreference();
   const distanceUnit = getDistanceUnit(unitSystem);
 
@@ -80,9 +89,14 @@ export function ShotList({ shots }: ShotListProps) {
             shotNumber={shots.length - startIndex - index}
             unitSystem={unitSystem}
             distanceUnit={distanceUnit}
+            onSelect={setSelectedShot}
           />
         ))}
       </div>
+
+      {selectedShot && (
+        <ShotDetail shot={selectedShot} onClose={() => setSelectedShot(null)} />
+      )}
 
       {totalPages > 1 && (
         <div className="pagination">

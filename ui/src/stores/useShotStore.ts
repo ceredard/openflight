@@ -12,6 +12,7 @@ interface ShotState {
   addShot: (shot: Shot) => void;
   setShots: (shots: Shot[]) => void;
   clearShots: () => void;
+  attachVideo: (shotNumber: number, videoPath: string, sessionId: string) => void;
 }
 
 export const useShotStore = create<ShotState>((set) => {
@@ -51,6 +52,20 @@ export const useShotStore = create<ShotState>((set) => {
         latestShot: null,
         shots: [],
         isNewShot: false,
+      });
+    },
+    attachVideo: (shotNumber, videoPath, sessionId) => {
+      set((state) => {
+        const shots = state.shots.map((shot) =>
+          shot.shot_number === shotNumber
+            ? { ...shot, video_path: videoPath, session_id: sessionId }
+            : shot
+        );
+        const latestShot =
+          state.latestShot?.shot_number === shotNumber
+            ? { ...state.latestShot, video_path: videoPath, session_id: sessionId }
+            : state.latestShot;
+        return { shots, latestShot };
       });
     },
   };

@@ -49,6 +49,13 @@ class SocketService {
       useShotStore.getState().addShot(data.shot);
     });
 
+    this.socket.on(
+      'shot_video_ready',
+      (data: { shot_number: number; video_path: string; session_id: string }) => {
+        useShotStore.getState().attachVideo(data.shot_number, data.video_path, data.session_id);
+      }
+    );
+
     this.socket.on('sim_status', (data: SimStatus) => {
       useSystemStore.getState().setSimStatus(data);
     });

@@ -31,6 +31,7 @@
   border-radius: var(--radius-md);
   min-height: 60px;
   transition: all var(--transition-smooth);
+  cursor: pointer;
 }
 
 .shot-row:hover {

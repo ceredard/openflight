@@ -29,6 +29,27 @@ class TestLogError:
         assert logger.session_path is None
 
 
+class TestLogShotVideo:
+    """Tests for shot video clip logging."""
+
+    def test_log_shot_video_writes_entry(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_shot_video(1, "videos/20260101_120000/shot_0001.mp4", 4.0)
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["type"] == "shot_video"
+        assert entry["shot_number"] == 1
+        assert entry["video_path"] == "videos/20260101_120000/shot_0001.mp4"
+        assert entry["duration_s"] == 4.0
+
+    def test_log_shot_video_skipped_when_disabled(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=False)
+        logger.log_shot_video(1, "videos/x/shot_0001.mp4", 4.0)
+        assert logger.session_path is None
+
+
 class TestLogSessionError:
     """Tests for the module-level session error helper."""
 

@@ -46,6 +46,15 @@ class TestFilterSessionLines:
         result = flt.filter_session_lines(lines, device_id="dev-1")
         assert result.kept_lines == []
 
+    def test_drops_shot_video(self):
+        lines = [
+            _line("shot_detected", ball_speed_mph=90),
+            _line("shot_video", shot_number=1, video_path="videos/s1/shot_0001.mp4"),
+        ]
+        result = flt.filter_session_lines(lines, device_id="dev-1")
+        kept_types = [json.loads(line)["type"] for line in result.kept_lines]
+        assert kept_types == ["shot_detected"]
+
     def test_drops_kept_line_over_32kb_and_counts_it(self):
         big = _line("shot_detected", note="x" * (33 * 1024))
         small = _line("shot_detected", ball_speed_mph=90)
