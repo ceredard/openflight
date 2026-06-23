@@ -100,21 +100,27 @@ fi
 # Phase 1: Dependencies
 # ──────────────────────────────────────────────────────────────────────
 
-# Check for Python 3.9+
+# Check for Python 3.13+ (required for picamera2/libcamera's compiled
+# bindings - see .python-version)
 log "Checking Python version..."
 if command -v python3 &> /dev/null; then
     PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
     PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 
-    if [ "$PYTHON_MAJOR" -ge 3 ] && [ "$PYTHON_MINOR" -ge 9 ]; then
+    if [ "$PYTHON_MAJOR" -ge 3 ] && [ "$PYTHON_MINOR" -ge 13 ]; then
         log "Python $PYTHON_VERSION found ✓"
     else
-        error "Python 3.9+ required, found $PYTHON_VERSION"
+        error "Python 3.13+ required, found $PYTHON_VERSION"
+        if [ "$PLATFORM" == "pi" ]; then
+            info "system python3 must be 3.13+ so the venv's --system-site-packages"
+            info "picks up apt-installed picamera2/libcamera bindings. Update your"
+            info "OS (Raspberry Pi OS bookworm -> trixie) or install python3.13 separately."
+        fi
         exit 1
     fi
 else
-    error "Python 3 not found. Please install Python 3.9+"
+    error "Python 3 not found. Please install Python 3.13+"
     exit 1
 fi
 

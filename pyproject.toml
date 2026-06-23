@@ -3,7 +3,7 @@ name = "openflight"
 version = "0.2.0"
 description = "DIY golf launch monitor using OPS243-A Doppler radar"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
 authors = [
     { name = "OpenFlight Contributors" }
@@ -16,9 +16,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -26,7 +24,6 @@ dependencies = [
     "pyserial>=3.5",
     "numpy>=1.20.0",
     "scipy>=1.10.0",
-    "tomli>=2.0.1; python_version < '3.11'",
     # Camera tracking is currently disabled; keep these out of the base install.
     # "trackers @ git+https://github.com/roboflow/trackers.git",
     # "supervision>=0.26.0",
@@ -95,7 +92,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
@@ -108,7 +105,7 @@ ignore = ["E501"]  # Line length handled separately
 combine-as-imports = true
 
 [tool.pylint.main]
-py-version = "3.10"
+py-version = "3.13"
 
 [tool.pylint.messages_control]
 disable = [

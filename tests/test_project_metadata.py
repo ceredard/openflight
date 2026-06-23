@@ -1,12 +1,8 @@
 """Tests for packaging metadata that affects setup/install behavior."""
 
 import re
+import tomllib
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
-    import tomli as tomllib
 
 
 def _pyproject() -> dict:

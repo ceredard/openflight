@@ -6,7 +6,7 @@ Thank you for your interest in contributing to OpenFlight! This document provide
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.13 or higher
 - Node.js 20+ (for UI development)
 - Git
 - [uv](https://github.com/astral-sh/uv) package manager (recommended)
