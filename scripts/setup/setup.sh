@@ -155,13 +155,16 @@ fi
 
 # picamera2 (Camera Module 3 shot video recording) binds to the system
 # libcamera stack and must come from apt, not pip - install it here so the
-# venv below can be created with --system-site-packages to see it.
+# venv below can be created with --system-site-packages to see it. ffmpeg is
+# also required: picamera2's CircularOutput writes a raw H.264 elementary
+# stream with no container, so save_clip() shells out to ffmpeg to remux it
+# into a real, player-compatible MP4.
 if [ "$PLATFORM" == "pi" ]; then
-    log "Installing picamera2 (Camera Module 3 video recording) via apt..."
-    if sudo apt install -y python3-picamera2; then
-        log "python3-picamera2 installed ✓"
+    log "Installing picamera2 + ffmpeg (Camera Module 3 video recording) via apt..."
+    if sudo apt install -y python3-picamera2 ffmpeg; then
+        log "python3-picamera2 and ffmpeg installed ✓"
     else
-        warn "Failed to install python3-picamera2 - shot video recording (--record-video) will be unavailable"
+        warn "Failed to install python3-picamera2/ffmpeg - shot video recording (--record-video) will be unavailable"
     fi
 fi
 
