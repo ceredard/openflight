@@ -1743,16 +1743,19 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     return True
 
 
-def _save_shot_video(shot_number: int, session_log) -> None:
+def _save_shot_video(shot_number: int, session_log, impact_timestamp: Optional[float]) -> None:
     """Background-thread target: save the pre/post-roll clip for a shot.
 
     Runs off the socket thread because save_clip() blocks for post_roll_s
-    while the post-impact footage finishes recording.
+    while the post-impact footage finishes recording. impact_timestamp lets
+    save_clip() subtract the (FFT/K-LD7/ballistics) processing time already
+    spent since the physical impact, so the clip stays anchored to the swing
+    instead of drifting earlier as that upstream processing gets slower.
     """
     try:
         video_dir = session_log.log_dir / "videos" / session_log.session_id
         video_path = video_dir / f"shot_{shot_number:04d}.mp4"
-        shot_recorder.save_clip(video_path)
+        shot_recorder.save_clip(video_path, impact_timestamp=impact_timestamp)
 
         duration_s = shot_recorder.config.pre_roll_s + shot_recorder.config.post_roll_s
         relative_path = str(video_path.relative_to(session_log.log_dir)).replace("\\", "/")
@@ -2205,7 +2208,7 @@ def on_shot_detected(shot: Shot):
         shot_number = session_log.stats.get("shots_detected", 0)
         threading.Thread(
             target=_save_shot_video,
-            args=(shot_number, session_log),
+            args=(shot_number, session_log, shot.impact_timestamp),
             daemon=True,
         ).start()
 

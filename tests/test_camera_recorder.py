@@ -170,6 +170,50 @@ class TestShotVideoRecorderSaveClip:
         with pytest.raises(RuntimeError, match="not running"):
             recorder.save_clip(tmp_path / "shot_0001.mp4")
 
+    def test_save_clip_shortens_post_roll_by_processing_delay_since_impact(
+        self, tmp_path, monkeypatch
+    ):
+        """The circular buffer is flushed relative to "now", not to the
+        actual swing - by the time save_clip() runs, on_shot_detected has
+        already spent time on FFT/spin/K-LD7/ballistics work. If save_clip
+        always sleeps the full post_roll_s from "now", the impact moment
+        drifts earlier and earlier into the clip as that upstream
+        processing delay grows, instead of staying ~pre_roll_s seconds in.
+        Passing impact_timestamp lets save_clip subtract the elapsed delay
+        from the post-roll sleep so the clip stays anchored to the impact."""
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(framerate=50, post_roll_s=2.0, pre_roll_s=2.0)
+        monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", lambda *a, **k: None)
+
+        sleep_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder.time.sleep", lambda s: sleep_calls.append(s)
+        )
+        # 0.7s of processing already elapsed between impact and this call.
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1000.7)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
+
+        assert sleep_calls == [pytest.approx(1.3)]
+
+    def test_save_clip_clamps_post_roll_to_zero_when_delay_exceeds_post_roll(
+        self, tmp_path, monkeypatch
+    ):
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(framerate=50, post_roll_s=2.0, pre_roll_s=2.0)
+        monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", lambda *a, **k: None)
+
+        sleep_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder.time.sleep", lambda s: sleep_calls.append(s)
+        )
+        # 5s of processing delay - already well past the post-roll window.
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1005.0)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
+
+        assert sleep_calls == [0.0]
+
 
 class TestMockShotVideoRecorder:
     def test_start_sets_running(self):

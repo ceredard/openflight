@@ -7,6 +7,7 @@ H.264 circular buffer so that, on a shot trigger, the pre-roll (swing) and a
 post-roll window (ball flight) can be flushed to a single mp4 file.
 """
 
+import logging
 import shutil
 import subprocess
 import threading
@@ -14,6 +15,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     from picamera2 import Picamera2
@@ -133,18 +136,44 @@ class ShotVideoRecorder:
         self._output = None
         self._running = False
 
-    def save_clip(self, out_path: Path, post_roll_s: Optional[float] = None) -> Path:
+    def save_clip(
+        self,
+        out_path: Path,
+        post_roll_s: Optional[float] = None,
+        impact_timestamp: Optional[float] = None,
+    ) -> Path:
         """
         Flush the pre-roll buffer and continue recording for post_roll_s,
         saving the combined clip to out_path as a playable MP4.
 
+        The pre-roll buffer is flushed relative to "now", not to the actual
+        swing - callers normally invoke this only after upstream processing
+        (FFT/spin/K-LD7/ballistics) has already spent some time since the
+        physical impact. Pass impact_timestamp (the epoch time of impact) so
+        that delay is subtracted from the post-roll sleep, keeping the
+        impact anchored ~pre_roll_s seconds into the clip instead of
+        drifting earlier as processing gets slower.
+
         Must be called off the main/socket thread - this blocks for the
-        duration of post_roll_s (plus the remux step).
+        duration of the (possibly shortened) post-roll sleep, plus the
+        remux step.
         """
         if not self._running or not self._output:
             raise RuntimeError("Recorder is not running")
 
         post_roll = self.config.post_roll_s if post_roll_s is None else post_roll_s
+        if impact_timestamp is not None:
+            elapsed_since_impact = time.time() - impact_timestamp
+            if elapsed_since_impact > self.config.pre_roll_s:
+                logger.warning(
+                    "Shot video processing delay (%.2fs) exceeded pre_roll_s "
+                    "(%.2fs) - impact frame may already be evicted from the "
+                    "circular buffer",
+                    elapsed_since_impact,
+                    self.config.pre_roll_s,
+                )
+            post_roll = max(0.0, post_roll - elapsed_since_impact)
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         # CircularOutput only writes a raw H.264 elementary stream - capture
@@ -193,7 +222,12 @@ class MockShotVideoRecorder:
     def stop(self):
         self._running = False
 
-    def save_clip(self, out_path: Path, post_roll_s: Optional[float] = None) -> Path:
+    def save_clip(
+        self,
+        out_path: Path,
+        post_roll_s: Optional[float] = None,
+        impact_timestamp: Optional[float] = None,
+    ) -> Path:
         if not self._running:
             raise RuntimeError("Recorder is not running")
 
