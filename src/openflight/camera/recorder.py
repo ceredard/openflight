@@ -28,7 +28,13 @@ except ImportError:
     PICAMERA_AVAILABLE = False
 
 
-def _mux_h264_to_mp4(raw_h264_path: Path, out_path: Path, framerate: int) -> None:
+def _mux_h264_to_mp4(
+    raw_h264_path: Path,
+    out_path: Path,
+    framerate: int,
+    trim_start_s: Optional[float] = None,
+    clip_duration_s: Optional[float] = None,
+) -> None:
     """Remux a raw H.264 elementary stream into a real MP4 container.
 
     picamera2's CircularOutput writes the bare encoded bitstream with no
@@ -37,6 +43,16 @@ def _mux_h264_to_mp4(raw_h264_path: Path, out_path: Path, framerate: int) -> Non
     reject it even though the encoded frames themselves are fine. This
     matches the `ffmpeg -i input.mp4 -c copy output.mp4` fix that confirms
     the underlying video data is valid; it just needs a container.
+
+    trim_start_s/clip_duration_s optionally cut the raw stream down to a
+    fixed window (used to anchor the saved clip on the actual impact when
+    the circular buffer is sized larger than pre_roll_s + post_roll_s - see
+    ShotVideoRecorder.save_clip). Frame timestamps are synthesized from
+    `-r framerate` on the raw stream, so the trim is deterministic even
+    though the elementary stream itself carries no timestamps. -ss is
+    placed before -i so ffmpeg seeks to the nearest preceding keyframe
+    (with -c copy, it can only ever be pushed earlier, never later, so the
+    clip can end up with a little extra pre-roll but never less).
     """
     if shutil.which("ffmpeg") is None:
         raise RuntimeError(
@@ -44,24 +60,15 @@ def _mux_h264_to_mp4(raw_h264_path: Path, out_path: Path, framerate: int) -> Non
             "playable MP4. Install it with: sudo apt install ffmpeg"
         )
 
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-r",
-            str(framerate),
-            "-i",
-            str(raw_h264_path),
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            str(out_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    cmd = ["ffmpeg", "-y", "-r", str(framerate)]
+    if trim_start_s:
+        cmd += ["-ss", str(trim_start_s)]
+    cmd += ["-i", str(raw_h264_path)]
+    if clip_duration_s:
+        cmd += ["-t", str(clip_duration_s)]
+    cmd += ["-c", "copy", "-movflags", "+faststart", str(out_path)]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg mux to MP4 failed (exit {result.returncode}): {result.stderr}")
 
@@ -70,15 +77,31 @@ def _mux_h264_to_mp4(raw_h264_path: Path, out_path: Path, framerate: int) -> Non
 class RecorderConfig:
     """Configuration for the shot video recorder."""
 
-    width: int = 1332
-    height: int = 990
+    # 2304x1296 is the IMX708 (Camera Module 3 Wide) sensor's native binned
+    # mode at this frame rate - going higher (full 4608x2592) caps out
+    # around 14fps, too slow to avoid motion blur on a golf swing.
+    width: int = 2304
+    height: int = 1296
     framerate: int = 50
 
-    # Pre-roll (swing) and post-roll (ball flight) clip duration.
+    # Pre-roll (swing) and post-roll (ball flight) clip duration, anchored
+    # on the shot's actual impact timestamp (see save_clip).
     pre_roll_s: float = 2.0
     post_roll_s: float = 2.0
 
-    bitrate: int = 8_000_000
+    # Extra circular-buffer capacity beyond pre_roll_s, to survive the delay
+    # between the physical impact and save_clip() actually being called
+    # (FFT/spin/K-LD7/ballistics processing all run before that). Without
+    # this cushion, a slow shot can scroll the swing right out of the
+    # buffer before it's ever flushed to disk.
+    max_processing_delay_s: float = 8.0
+
+    bitrate: int = 14_000_000
+
+    @property
+    def buffer_capacity_s(self) -> float:
+        """Total circular-buffer span: pre-roll plus the processing-delay cushion."""
+        return self.pre_roll_s + self.max_processing_delay_s
 
 
 class ShotVideoRecorder:
@@ -117,9 +140,8 @@ class ShotVideoRecorder:
         self._camera.configure(video_config)
 
         self._encoder = H264Encoder(bitrate=self.config.bitrate)
-        buffer_size_s = self.config.pre_roll_s
         self._output = CircularOutput(
-            buffersize=int(buffer_size_s * self.config.framerate)
+            buffersize=int(self.config.buffer_capacity_s * self.config.framerate)
         )
 
         self._camera.start_recording(self._encoder, self._output)
@@ -143,16 +165,19 @@ class ShotVideoRecorder:
         impact_timestamp: Optional[float] = None,
     ) -> Path:
         """
-        Flush the pre-roll buffer and continue recording for post_roll_s,
-        saving the combined clip to out_path as a playable MP4.
+        Flush the circular buffer and continue recording briefly, saving a
+        pre_roll_s + post_roll_s clip anchored on the actual impact to
+        out_path as a playable MP4.
 
-        The pre-roll buffer is flushed relative to "now", not to the actual
-        swing - callers normally invoke this only after upstream processing
+        The buffer is flushed relative to "now", not to the actual swing -
+        callers normally invoke this only after upstream processing
         (FFT/spin/K-LD7/ballistics) has already spent some time since the
-        physical impact. Pass impact_timestamp (the epoch time of impact) so
-        that delay is subtracted from the post-roll sleep, keeping the
-        impact anchored ~pre_roll_s seconds into the clip instead of
-        drifting earlier as processing gets slower.
+        physical impact. Pass impact_timestamp (the epoch time of impact)
+        so that delay can be located within the buffer and trimmed out,
+        keeping the clip consistently framed around the impact instead of
+        drifting later as processing gets slower. The buffer is sized with
+        a cushion (config.max_processing_delay_s) specifically so this
+        delay doesn't scroll the swing out of the buffer entirely.
 
         Must be called off the main/socket thread - this blocks for the
         duration of the (possibly shortened) post-roll sleep, plus the
@@ -162,16 +187,21 @@ class ShotVideoRecorder:
             raise RuntimeError("Recorder is not running")
 
         post_roll = self.config.post_roll_s if post_roll_s is None else post_roll_s
+        trim_start_s = None
+        clip_duration_s = None
         if impact_timestamp is not None:
             elapsed_since_impact = time.time() - impact_timestamp
-            if elapsed_since_impact > self.config.pre_roll_s:
+            buffer_capacity_s = self.config.buffer_capacity_s
+            if elapsed_since_impact > buffer_capacity_s - self.config.pre_roll_s:
                 logger.warning(
-                    "Shot video processing delay (%.2fs) exceeded pre_roll_s "
-                    "(%.2fs) - impact frame may already be evicted from the "
-                    "circular buffer",
+                    "Shot video processing delay (%.2fs) exceeded the buffer "
+                    "cushion (%.2fs) - impact frame may already be evicted "
+                    "from the circular buffer",
                     elapsed_since_impact,
-                    self.config.pre_roll_s,
+                    buffer_capacity_s - self.config.pre_roll_s,
                 )
+            trim_start_s = max(0.0, buffer_capacity_s - elapsed_since_impact - self.config.pre_roll_s)
+            clip_duration_s = self.config.pre_roll_s + post_roll
             post_roll = max(0.0, post_roll - elapsed_since_impact)
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +217,13 @@ class ShotVideoRecorder:
             self._output.stop()
 
         try:
-            _mux_h264_to_mp4(raw_path, out_path, framerate=self.config.framerate)
+            _mux_h264_to_mp4(
+                raw_path,
+                out_path,
+                framerate=self.config.framerate,
+                trim_start_s=trim_start_s,
+                clip_duration_s=clip_duration_s,
+            )
         finally:
             raw_path.unlink(missing_ok=True)
 

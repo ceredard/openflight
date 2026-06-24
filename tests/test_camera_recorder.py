@@ -14,11 +14,16 @@ from openflight.camera.recorder import _mux_h264_to_mp4
 class TestRecorderConfig:
     def test_default_config(self):
         config = RecorderConfig()
-        assert config.width == 1332
-        assert config.height == 990
+        assert config.width == 2304
+        assert config.height == 1296
         assert config.framerate == 50
         assert config.pre_roll_s == 2.0
         assert config.post_roll_s == 2.0
+        assert config.max_processing_delay_s == 8.0
+
+    def test_buffer_capacity_is_pre_roll_plus_processing_delay_cushion(self):
+        config = RecorderConfig(pre_roll_s=2.0, max_processing_delay_s=8.0)
+        assert config.buffer_capacity_s == 10.0
 
 
 class TestMuxH264ToMp4:
@@ -52,6 +57,51 @@ class TestMuxH264ToMp4:
         assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
         assert "-movflags" in cmd and cmd[cmd.index("-movflags") + 1] == "+faststart"
         assert cmd[-1] == str(out_path)
+        assert "-ss" not in cmd
+        assert "-t" not in cmd
+
+    def test_omits_trim_flags_when_trim_start_is_zero(self, tmp_path, monkeypatch):
+        """A trim_start_s of exactly 0.0 means no trim is needed - don't
+        emit a no-op -ss 0."""
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        _mux_h264_to_mp4(
+            tmp_path / "in.h264", tmp_path / "out.mp4", framerate=50, trim_start_s=0.0
+        )
+
+        assert "-ss" not in captured["cmd"]
+
+    def test_includes_trim_flags_when_trim_start_and_duration_given(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        raw_path = tmp_path / "in.h264"
+        _mux_h264_to_mp4(
+            raw_path,
+            tmp_path / "out.mp4",
+            framerate=50,
+            trim_start_s=7.3,
+            clip_duration_s=4.0,
+        )
+
+        cmd = captured["cmd"]
+        # -ss before -i so ffmpeg can fast-seek the input.
+        assert cmd.index("-ss") < cmd.index("-i")
+        assert cmd[cmd.index("-ss") + 1] == "7.3"
+        assert cmd[cmd.index("-t") + 1] == "4.0"
 
     def test_raises_on_ffmpeg_failure(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
@@ -101,6 +151,44 @@ class TestMuxH264ToMp4:
         assert b"ftyp" in header, "output should be a real MP4 container, not a raw stream"
 
 
+class TestShotVideoRecorderStart:
+    """start() must size the circular buffer off buffer_capacity_s (the
+    processing-delay cushion), not just pre_roll_s, or a slow shot can
+    scroll the swing out of the buffer before save_clip() ever runs."""
+
+    def test_start_sizes_circular_output_from_buffer_capacity(self, monkeypatch):
+        import openflight.camera.recorder as recorder_module
+
+        captured = {}
+
+        class FakeCamera:
+            def create_video_configuration(self, **kwargs):
+                return {}
+
+            def configure(self, video_config):
+                pass
+
+            def start_recording(self, encoder, output):
+                pass
+
+        class FakeCircularOutput:
+            def __init__(self, buffersize):
+                captured["buffersize"] = buffersize
+
+        monkeypatch.setattr(recorder_module, "PICAMERA_AVAILABLE", True)
+        monkeypatch.setattr(recorder_module, "Picamera2", FakeCamera)
+        monkeypatch.setattr(recorder_module, "H264Encoder", lambda bitrate: None)
+        monkeypatch.setattr(recorder_module, "CircularOutput", FakeCircularOutput)
+
+        config = RecorderConfig(framerate=50, pre_roll_s=2.0, max_processing_delay_s=8.0)
+        recorder = ShotVideoRecorder(config)
+        recorder.start()
+
+        # buffer_capacity_s (10.0) * framerate (50) = 500 frames, not just
+        # pre_roll_s (2.0) * framerate (50) = 100 frames.
+        assert captured["buffersize"] == 500
+
+
 class TestShotVideoRecorderSaveClip:
     """Exercise save_clip()'s remux flow without requiring real picamera2
     hardware - stub the circular-buffer output and the mux step."""
@@ -132,7 +220,7 @@ class TestShotVideoRecorderSaveClip:
         recorder = self._running_recorder()
         mux_calls = []
 
-        def fake_mux(raw_path, out_path, framerate):
+        def fake_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None):
             mux_calls.append((raw_path, out_path, framerate))
             out_path.write_bytes(b"fake mp4 bytes")
 
@@ -151,7 +239,7 @@ class TestShotVideoRecorderSaveClip:
     def test_save_clip_cleans_up_temp_file_even_if_mux_fails(self, tmp_path, monkeypatch):
         recorder = self._running_recorder()
 
-        def failing_mux(raw_path, out_path, framerate):
+        def failing_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None):
             raise RuntimeError("ffmpeg exploded")
 
         monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", failing_mux)
@@ -173,16 +261,16 @@ class TestShotVideoRecorderSaveClip:
     def test_save_clip_shortens_post_roll_by_processing_delay_since_impact(
         self, tmp_path, monkeypatch
     ):
-        """The circular buffer is flushed relative to "now", not to the
-        actual swing - by the time save_clip() runs, on_shot_detected has
-        already spent time on FFT/spin/K-LD7/ballistics work. If save_clip
-        always sleeps the full post_roll_s from "now", the impact moment
-        drifts earlier and earlier into the clip as that upstream
-        processing delay grows, instead of staying ~pre_roll_s seconds in.
-        Passing impact_timestamp lets save_clip subtract the elapsed delay
-        from the post-roll sleep so the clip stays anchored to the impact."""
+        """If save_clip always slept the full post_roll_s from "now", the
+        impact moment would drift later into the live recording the slower
+        upstream processing (FFT/spin/K-LD7/ballistics) got. Passing
+        impact_timestamp lets save_clip subtract the elapsed delay from the
+        post-roll sleep instead, since that span is already sitting in the
+        buffer from when it was recorded live the first time around."""
         recorder = self._running_recorder()
-        recorder.config = RecorderConfig(framerate=50, post_roll_s=2.0, pre_roll_s=2.0)
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
         monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", lambda *a, **k: None)
 
         sleep_calls = []
@@ -200,19 +288,76 @@ class TestShotVideoRecorderSaveClip:
         self, tmp_path, monkeypatch
     ):
         recorder = self._running_recorder()
-        recorder.config = RecorderConfig(framerate=50, post_roll_s=2.0, pre_roll_s=2.0)
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
         monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", lambda *a, **k: None)
 
         sleep_calls = []
         monkeypatch.setattr(
             "openflight.camera.recorder.time.sleep", lambda s: sleep_calls.append(s)
         )
-        # 5s of processing delay - already well past the post-roll window.
+        # 5s of processing delay - already well past the post-roll window,
+        # but still well inside the buffer's processing-delay cushion.
         monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1005.0)
 
         recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
 
         assert sleep_calls == [0.0]
+
+    def test_save_clip_trims_buffer_to_a_clip_anchored_on_impact(self, tmp_path, monkeypatch):
+        """This is the fix for clips drifting ~6s behind the actual swing:
+        the buffer holds buffer_capacity_s (pre_roll_s + cushion) of
+        history, so the impact sits buried inside it once processing has
+        eaten into the cushion. trim_start_s/clip_duration_s must locate
+        the impact within that buffer and cut a consistent pre_roll_s +
+        post_roll_s window around it, regardless of how slow processing
+        was for this particular shot."""
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
+        mux_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder._mux_h264_to_mp4",
+            lambda *a, **k: mux_calls.append(k),
+        )
+        monkeypatch.setattr("openflight.camera.recorder.time.sleep", lambda _s: None)
+        # 6s of processing delay - the scenario reported as "video is ~6s
+        # behind". buffer_capacity_s is 10s (2 + 8 cushion), so the impact
+        # is still inside the buffer, 6s back from "now".
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1006.0)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
+
+        assert len(mux_calls) == 1
+        assert mux_calls[0]["trim_start_s"] == pytest.approx(2.0)
+        assert mux_calls[0]["clip_duration_s"] == pytest.approx(4.0)
+
+    def test_save_clip_clamps_trim_start_when_delay_exceeds_buffer_cushion(
+        self, tmp_path, monkeypatch
+    ):
+        """If processing took longer than the buffer can hold at all, the
+        earliest available frame is the best we can do - clamp to 0 rather
+        than requesting a negative seek."""
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
+        mux_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder._mux_h264_to_mp4",
+            lambda *a, **k: mux_calls.append(k),
+        )
+        monkeypatch.setattr("openflight.camera.recorder.time.sleep", lambda _s: None)
+        # 15s of delay - beyond the 10s buffer capacity entirely.
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1015.0)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
+
+        assert len(mux_calls) == 1
+        assert mux_calls[0]["trim_start_s"] == 0.0
+        assert mux_calls[0]["clip_duration_s"] == pytest.approx(4.0)
 
 
 class TestMockShotVideoRecorder:
