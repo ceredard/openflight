@@ -140,7 +140,13 @@ class ShotVideoRecorder:
         )
         self._camera.configure(video_config)
 
-        self._encoder = H264Encoder(bitrate=self.config.bitrate)
+        # repeat=True re-sends SPS/PPS (and forces a keyframe) periodically
+        # rather than only once at the start of the live encode session.
+        # Without it, a circular-buffer dump starting mid-session has no
+        # parseable sequence header at all - ffmpeg's raw h264 demuxer then
+        # can't identify any frames, producing a structurally valid but
+        # entirely empty MP4 (zero streams, Duration: N/A) on mux.
+        self._encoder = H264Encoder(bitrate=self.config.bitrate, repeat=True)
         self._output = CircularOutput(
             buffersize=int(self.config.buffer_capacity_s * self.config.framerate)
         )
@@ -166,6 +172,7 @@ class ShotVideoRecorder:
         out_path: Path,
         post_roll_s: Optional[float] = None,
         impact_timestamp: Optional[float] = None,
+        keep_raw: bool = False,
     ) -> Path:
         """
         Flush the circular buffer and continue recording briefly, saving a
@@ -185,6 +192,11 @@ class ShotVideoRecorder:
         Must be called off the main/socket thread - this blocks for the
         duration of the (possibly shortened) post-roll sleep, plus the
         remux step.
+
+        keep_raw: diagnostic-only - keeps the intermediate sibling .h264
+        file instead of deleting it, so it can be inspected directly with
+        ffprobe (e.g. to check whether it has a parseable sequence header)
+        independent of the mux step.
         """
         if not self._running or not self._output:
             raise RuntimeError("Recorder is not running")
@@ -238,7 +250,8 @@ class ShotVideoRecorder:
                 clip_duration_s=clip_duration_s,
             )
         finally:
-            raw_path.unlink(missing_ok=True)
+            if not keep_raw:
+                raw_path.unlink(missing_ok=True)
 
         return out_path
 
@@ -276,6 +289,7 @@ class MockShotVideoRecorder:
         out_path: Path,
         post_roll_s: Optional[float] = None,
         impact_timestamp: Optional[float] = None,
+        keep_raw: bool = False,
     ) -> Path:
         if not self._running:
             raise RuntimeError("Recorder is not running")

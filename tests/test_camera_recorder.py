@@ -154,7 +154,12 @@ class TestMuxH264ToMp4:
 class TestShotVideoRecorderStart:
     """start() must size the circular buffer off buffer_capacity_s (the
     processing-delay cushion), not just pre_roll_s, or a slow shot can
-    scroll the swing out of the buffer before save_clip() ever runs."""
+    scroll the swing out of the buffer before save_clip() ever runs. It
+    must also configure the encoder to repeat SPS/PPS headers, or a
+    circular-buffer dump starting mid-session has no parseable sequence
+    header at all (real-world symptom: a structurally valid MP4 with zero
+    video streams, since ffmpeg's raw h264 demuxer can't identify any
+    frames without it)."""
 
     def test_start_sizes_circular_output_from_buffer_capacity(self, monkeypatch):
         import openflight.camera.recorder as recorder_module
@@ -177,7 +182,11 @@ class TestShotVideoRecorderStart:
 
         monkeypatch.setattr(recorder_module, "PICAMERA_AVAILABLE", True)
         monkeypatch.setattr(recorder_module, "Picamera2", FakeCamera)
-        monkeypatch.setattr(recorder_module, "H264Encoder", lambda bitrate: None)
+        monkeypatch.setattr(
+            recorder_module,
+            "H264Encoder",
+            lambda **kwargs: captured.setdefault("encoder_kwargs", kwargs),
+        )
         monkeypatch.setattr(recorder_module, "CircularOutput", FakeCircularOutput)
 
         config = RecorderConfig(framerate=50, pre_roll_s=2.0, max_processing_delay_s=8.0)
@@ -187,6 +196,35 @@ class TestShotVideoRecorderStart:
         # buffer_capacity_s (10.0) * framerate (50) = 500 frames, not just
         # pre_roll_s (2.0) * framerate (50) = 100 frames.
         assert captured["buffersize"] == 500
+
+    def test_start_configures_encoder_to_repeat_sps_pps(self, monkeypatch):
+        import openflight.camera.recorder as recorder_module
+
+        captured = {}
+
+        class FakeCamera:
+            def create_video_configuration(self, **kwargs):
+                return {}
+
+            def configure(self, video_config):
+                pass
+
+            def start_recording(self, encoder, output):
+                pass
+
+        monkeypatch.setattr(recorder_module, "PICAMERA_AVAILABLE", True)
+        monkeypatch.setattr(recorder_module, "Picamera2", FakeCamera)
+        monkeypatch.setattr(
+            recorder_module,
+            "H264Encoder",
+            lambda **kwargs: captured.setdefault("encoder_kwargs", kwargs),
+        )
+        monkeypatch.setattr(recorder_module, "CircularOutput", lambda buffersize: None)
+
+        recorder = ShotVideoRecorder(RecorderConfig())
+        recorder.start()
+
+        assert captured["encoder_kwargs"]["repeat"] is True
 
 
 class TestShotVideoRecorderSaveClip:
