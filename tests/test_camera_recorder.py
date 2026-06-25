@@ -214,6 +214,11 @@ class TestShotVideoRecorderSaveClip:
         recorder._output = self._FakeCircularOutput()
         recorder._camera = None
         recorder._encoder = None
+        # Long-running session by default, so the ring buffer is already
+        # fully populated to buffer_capacity_s - matches what most tests
+        # below are exercising. Tests of the "buffer not yet full" case
+        # override this explicitly.
+        recorder._started_at = 0.0
         return recorder
 
     def test_save_clip_writes_to_temp_h264_then_muxes_and_cleans_up(self, tmp_path, monkeypatch):
@@ -358,6 +363,61 @@ class TestShotVideoRecorderSaveClip:
         assert len(mux_calls) == 1
         assert mux_calls[0]["trim_start_s"] == 0.0
         assert mux_calls[0]["clip_duration_s"] == pytest.approx(4.0)
+
+    def test_save_clip_clamps_trim_start_when_buffer_not_yet_full(self, tmp_path, monkeypatch):
+        """Regression test: right after start() (or in a short test script),
+        the ring buffer holds less than buffer_capacity_s of real footage.
+        Sizing trim_start_s off the theoretical max buffer_capacity_s would
+        seek -ss past the end of the much shorter real .h264 file - ffmpeg
+        then writes a structurally valid but empty MP4 (no video stream,
+        Duration: N/A), even though the encoded frames are otherwise fine."""
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
+        # Recorder has only been running 3s - buffer_capacity_s is 10s, so
+        # it's nowhere near full yet.
+        recorder._started_at = 1000.0
+        mux_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder._mux_h264_to_mp4",
+            lambda *a, **k: mux_calls.append(k),
+        )
+        monkeypatch.setattr("openflight.camera.recorder.time.sleep", lambda _s: None)
+        # "Now" is 3s after start(), 0.5s after impact.
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1003.0)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1002.5)
+
+        assert len(mux_calls) == 1
+        # available_buffer_s = min(10, 3) = 3 -> trim_start_s = 3 - 0.5 - 2 = 0.5,
+        # safely within the ~3s of real footage. The old buffer_capacity_s=10
+        # assumption would have produced 7.5, well past EOF.
+        assert mux_calls[0]["trim_start_s"] == pytest.approx(0.5)
+
+    def test_save_clip_uses_buffer_capacity_once_recorder_has_run_long_enough(
+        self, tmp_path, monkeypatch
+    ):
+        """Once the recorder has been running at least buffer_capacity_s,
+        the ring buffer really is full - trim_start_s should use the full
+        theoretical span again, matching test_save_clip_trims_buffer_to_a_clip_anchored_on_impact."""
+        recorder = self._running_recorder()
+        recorder.config = RecorderConfig(
+            framerate=50, post_roll_s=2.0, pre_roll_s=2.0, max_processing_delay_s=8.0
+        )
+        recorder._started_at = 0.0
+        mux_calls = []
+        monkeypatch.setattr(
+            "openflight.camera.recorder._mux_h264_to_mp4",
+            lambda *a, **k: mux_calls.append(k),
+        )
+        monkeypatch.setattr("openflight.camera.recorder.time.sleep", lambda _s: None)
+        monkeypatch.setattr("openflight.camera.recorder.time.time", lambda: 1006.0)
+
+        recorder.save_clip(tmp_path / "shot_0001.mp4", impact_timestamp=1000.0)
+
+        assert len(mux_calls) == 1
+        assert mux_calls[0]["trim_start_s"] == pytest.approx(2.0)
 
 
 class TestMockShotVideoRecorder:

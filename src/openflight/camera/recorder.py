@@ -126,6 +126,7 @@ class ShotVideoRecorder:
         self._output: Optional["CircularOutput"] = None
         self._lock = threading.Lock()
         self._running = False
+        self._started_at: Optional[float] = None
 
     def start(self) -> bool:
         """Start continuous recording into the circular buffer."""
@@ -146,6 +147,7 @@ class ShotVideoRecorder:
 
         self._camera.start_recording(self._encoder, self._output)
         self._running = True
+        self._started_at = time.time()
         return True
 
     def stop(self):
@@ -157,6 +159,7 @@ class ShotVideoRecorder:
         self._encoder = None
         self._output = None
         self._running = False
+        self._started_at = None
 
     def save_clip(
         self,
@@ -190,17 +193,27 @@ class ShotVideoRecorder:
         trim_start_s = None
         clip_duration_s = None
         if impact_timestamp is not None:
-            elapsed_since_impact = time.time() - impact_timestamp
-            buffer_capacity_s = self.config.buffer_capacity_s
-            if elapsed_since_impact > buffer_capacity_s - self.config.pre_roll_s:
+            now = time.time()
+            elapsed_since_impact = now - impact_timestamp
+            # The ring buffer only holds buffer_capacity_s once the recorder
+            # has actually been running that long - right after start(), or
+            # in a short test script, it holds less. Sizing the trim off the
+            # theoretical max here would seek -ss past the end of the much
+            # shorter real .h264 file, which ffmpeg copies as a silently
+            # empty (but structurally valid) MP4 - zero streams, Duration N/A.
+            recording_elapsed_s = (
+                now - self._started_at if self._started_at is not None else self.config.buffer_capacity_s
+            )
+            available_buffer_s = min(self.config.buffer_capacity_s, recording_elapsed_s)
+            if elapsed_since_impact > available_buffer_s - self.config.pre_roll_s:
                 logger.warning(
-                    "Shot video processing delay (%.2fs) exceeded the buffer "
-                    "cushion (%.2fs) - impact frame may already be evicted "
+                    "Shot video processing delay (%.2fs) exceeded the available "
+                    "buffer cushion (%.2fs) - impact frame may already be evicted "
                     "from the circular buffer",
                     elapsed_since_impact,
-                    buffer_capacity_s - self.config.pre_roll_s,
+                    available_buffer_s - self.config.pre_roll_s,
                 )
-            trim_start_s = max(0.0, buffer_capacity_s - elapsed_since_impact - self.config.pre_roll_s)
+            trim_start_s = max(0.0, available_buffer_s - elapsed_since_impact - self.config.pre_roll_s)
             clip_duration_s = self.config.pre_roll_s + post_roll
             post_roll = max(0.0, post_roll - elapsed_since_impact)
 
