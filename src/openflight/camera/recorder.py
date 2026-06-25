@@ -151,7 +151,13 @@ class ShotVideoRecorder:
             buffersize=int(self.config.buffer_capacity_s * self.config.framerate)
         )
 
-        self._camera.start_recording(self._encoder, self._output)
+        # Start the camera pipeline itself before attaching the encoder,
+        # rather than the start_recording() convenience (which starts both
+        # together) - this matches picamera2's own circular-buffer example.
+        # Telling the V4L2 M2M encoder to stream on before the camera is
+        # actually producing frames can fail at the ioctl level.
+        self._camera.start()
+        self._camera.start_encoder(self._encoder, self._output)
         self._running = True
         self._started_at = time.time()
         return True

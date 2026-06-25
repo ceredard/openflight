@@ -173,7 +173,10 @@ class TestShotVideoRecorderStart:
             def configure(self, video_config):
                 pass
 
-            def start_recording(self, encoder, output):
+            def start(self):
+                pass
+
+            def start_encoder(self, encoder, output):
                 pass
 
         class FakeCircularOutput:
@@ -209,7 +212,10 @@ class TestShotVideoRecorderStart:
             def configure(self, video_config):
                 pass
 
-            def start_recording(self, encoder, output):
+            def start(self):
+                pass
+
+            def start_encoder(self, encoder, output):
                 pass
 
         monkeypatch.setattr(recorder_module, "PICAMERA_AVAILABLE", True)
@@ -225,6 +231,40 @@ class TestShotVideoRecorderStart:
         recorder.start()
 
         assert captured["encoder_kwargs"]["repeat"] is True
+
+    def test_start_starts_camera_before_attaching_encoder(self, monkeypatch):
+        """Regression test: starting the encoder (VIDIOC_STREAMON on the
+        V4L2 M2M hardware encoder) before the camera pipeline is actually
+        producing frames can fail at the ioctl level (observed as
+        ProcessLookupError: [Errno 3] No such process on a Pi 4). picamera2's
+        own circular-buffer example calls start() before start_encoder()
+        rather than the combined start_recording() - this must too."""
+        import openflight.camera.recorder as recorder_module
+
+        calls = []
+
+        class FakeCamera:
+            def create_video_configuration(self, **kwargs):
+                return {}
+
+            def configure(self, video_config):
+                pass
+
+            def start(self):
+                calls.append("start")
+
+            def start_encoder(self, encoder, output):
+                calls.append("start_encoder")
+
+        monkeypatch.setattr(recorder_module, "PICAMERA_AVAILABLE", True)
+        monkeypatch.setattr(recorder_module, "Picamera2", FakeCamera)
+        monkeypatch.setattr(recorder_module, "H264Encoder", lambda **kwargs: None)
+        monkeypatch.setattr(recorder_module, "CircularOutput", lambda buffersize: None)
+
+        recorder = ShotVideoRecorder(RecorderConfig())
+        recorder.start()
+
+        assert calls == ["start", "start_encoder"]
 
 
 class TestShotVideoRecorderSaveClip:
