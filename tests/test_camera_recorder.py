@@ -14,8 +14,8 @@ from openflight.camera.recorder import _mux_h264_to_mp4
 class TestRecorderConfig:
     def test_default_config(self):
         config = RecorderConfig()
-        assert config.width == 2304
-        assert config.height == 1296
+        assert config.width == 1536
+        assert config.height == 864
         assert config.framerate == 50
         assert config.pre_roll_s == 2.0
         assert config.post_roll_s == 2.0

@@ -77,11 +77,14 @@ def _mux_h264_to_mp4(
 class RecorderConfig:
     """Configuration for the shot video recorder."""
 
-    # 2304x1296 is the IMX708 (Camera Module 3 Wide) sensor's native binned
-    # mode at this frame rate - going higher (full 4608x2592) caps out
-    # around 14fps, too slow to avoid motion blur on a golf swing.
-    width: int = 2304
-    height: int = 1296
+    # 1536x864 is the largest sensor mode confirmed (via rpicam-vid, on the
+    # actual Pi 4 test rig) to sustain 50fps through the hardware H.264
+    # encoder. The IMX708 Wide's 2304x1296 binned mode captures fine at the
+    # ISP/sensor level, but the Pi 4's hardware encoder can't keep up with
+    # it at 50fps - rpicam-vid itself fails with "failed to start output
+    # streaming" at that resolution, independent of anything in this repo.
+    width: int = 1536
+    height: int = 864
     framerate: int = 50
 
     # Pre-roll (swing) and post-roll (ball flight) clip duration, anchored

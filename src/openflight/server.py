@@ -2674,10 +2674,10 @@ def main():
         "(separate from the ball-tracking camera above). Off by default.",
     )
     parser.add_argument(
-        "--record-width", type=int, default=1332, help="Shot video width in pixels (default 1332)"
+        "--record-width", type=int, default=1536, help="Shot video width in pixels (default 1536)"
     )
     parser.add_argument(
-        "--record-height", type=int, default=990, help="Shot video height in pixels (default 990)"
+        "--record-height", type=int, default=864, help="Shot video height in pixels (default 864)"
     )
     parser.add_argument(
         "--record-fps", type=int, default=50, help="Shot video framerate (default 50)"
