@@ -98,8 +98,11 @@ class TestMuxH264ToMp4:
         )
 
         cmd = captured["cmd"]
-        # -ss before -i so ffmpeg can fast-seek the input.
-        assert cmd.index("-ss") < cmd.index("-i")
+        # -ss after -i (output seeking) - ffmpeg's raw h264 demuxer can't
+        # input-seek at all ("could not seek to position ..."), confirmed
+        # against a real Pi-encoded stream, and silently produces an empty
+        # file rather than erroring.
+        assert cmd.index("-ss") > cmd.index("-i")
         assert cmd[cmd.index("-ss") + 1] == "7.3"
         assert cmd[cmd.index("-t") + 1] == "4.0"
 
@@ -149,6 +152,67 @@ class TestMuxH264ToMp4:
 
         header = out_path.read_bytes()[:32]
         assert b"ftyp" in header, "output should be a real MP4 container, not a raw stream"
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+    def test_real_ffmpeg_trim_produces_a_non_empty_clip(self, tmp_path):
+        """Regression test for the actual bug hit on hardware: input
+        seeking (-ss before -i) on a real raw h264 stream fails outright
+        ("could not seek to position ...") and silently writes an empty
+        but structurally valid MP4 - camera/encoder/buffer all working
+        perfectly, only the trim step broken. Generates a longer stream
+        with periodic keyframes (like the real encoder's iperiod) and
+        confirms a trimmed mux actually produces playable video, not just
+        a valid-looking empty container."""
+        raw_path = tmp_path / "raw.h264"
+        out_path = tmp_path / "out.mp4"
+
+        gen = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x64:rate=10:duration=3",
+                "-c:v",
+                "libx264",
+                "-g",
+                "10",  # keyframe every 1s at 10fps, like iperiod=framerate
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "h264",
+                str(raw_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if gen.returncode != 0:
+            pytest.skip(f"ffmpeg couldn't generate a test H.264 stream: {gen.stderr}")
+
+        _mux_h264_to_mp4(raw_path, out_path, framerate=10, trim_start_s=1.5, clip_duration_s=1.0)
+
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        duration = float(probe.stdout.strip() or 0)
+        assert duration > 0, (
+            "trimmed clip has zero duration - this is the exact 'valid "
+            "container, no playable content' bug from input-seek failing"
+        )
 
 
 class TestShotVideoRecorderStart:
@@ -227,10 +291,13 @@ class TestShotVideoRecorderStart:
         )
         monkeypatch.setattr(recorder_module, "CircularOutput", lambda buffersize: None)
 
-        recorder = ShotVideoRecorder(RecorderConfig())
+        recorder = ShotVideoRecorder(RecorderConfig(framerate=50))
         recorder.start()
 
         assert captured["encoder_kwargs"]["repeat"] is True
+        # Frequent keyframes keep save_clip()'s output-seek trim (which can
+        # only cut at a keyframe) close to the requested start time.
+        assert captured["encoder_kwargs"]["iperiod"] == 50
 
     def test_start_starts_camera_before_attaching_encoder(self, monkeypatch):
         """Regression test: starting the encoder (VIDIOC_STREAMON on the

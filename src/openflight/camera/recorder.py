@@ -49,10 +49,24 @@ def _mux_h264_to_mp4(
     the circular buffer is sized larger than pre_roll_s + post_roll_s - see
     ShotVideoRecorder.save_clip). Frame timestamps are synthesized from
     `-r framerate` on the raw stream, so the trim is deterministic even
-    though the elementary stream itself carries no timestamps. -ss is
-    placed before -i so ffmpeg seeks to the nearest preceding keyframe
-    (with -c copy, it can only ever be pushed earlier, never later, so the
-    clip can end up with a little extra pre-roll but never less).
+    though the elementary stream itself carries no timestamps.
+
+    -ss/-t are placed AFTER -i (output seeking), not before (input seeking).
+    ffmpeg's raw h264 demuxer has no index to seek against - on a real
+    Pi-encoded stream, input seeking fails outright ("could not seek to
+    position ...") and silently produces an empty output file, even though
+    the input itself is perfectly valid. Output seeking instead demuxes
+    sequentially from the start and discards everything before trim_start_s,
+    which works regardless of the demuxer's seek support - the only cost is
+    reading through the whole buffer dump rather than fast-seeking into it,
+    which is negligible at these clip sizes (tens of MB).
+
+    With -c copy, output seeking can only cut at a keyframe - and unlike
+    input seeking (which snaps to the keyframe at or before the target),
+    output seeking snaps to the keyframe at or after it, so the clip can
+    start a little later than requested but never earlier. H264Encoder is
+    configured with a 1-second keyframe interval (see ShotVideoRecorder)
+    specifically to keep that snap small.
     """
     if shutil.which("ffmpeg") is None:
         raise RuntimeError(
@@ -60,10 +74,9 @@ def _mux_h264_to_mp4(
             "playable MP4. Install it with: sudo apt install ffmpeg"
         )
 
-    cmd = ["ffmpeg", "-y", "-r", str(framerate)]
+    cmd = ["ffmpeg", "-y", "-r", str(framerate), "-i", str(raw_h264_path)]
     if trim_start_s:
         cmd += ["-ss", str(trim_start_s)]
-    cmd += ["-i", str(raw_h264_path)]
     if clip_duration_s:
         cmd += ["-t", str(clip_duration_s)]
     cmd += ["-c", "copy", "-movflags", "+faststart", str(out_path)]
@@ -148,8 +161,15 @@ class ShotVideoRecorder:
         # Without it, a circular-buffer dump starting mid-session has no
         # parseable sequence header at all - ffmpeg's raw h264 demuxer then
         # can't identify any frames, producing a structurally valid but
-        # entirely empty MP4 (zero streams, Duration: N/A) on mux.
-        self._encoder = H264Encoder(bitrate=self.config.bitrate, repeat=True)
+        # entirely empty MP4 (zero streams, Duration: N/A) on mux. iperiod
+        # (keyframe interval, in frames) is set to ~1s so save_clip()'s
+        # output-seek trim (see _mux_h264_to_mp4) never has to snap more
+        # than ~1s past the requested start.
+        self._encoder = H264Encoder(
+            bitrate=self.config.bitrate,
+            repeat=True,
+            iperiod=self.config.framerate,
+        )
         self._output = CircularOutput(
             buffersize=int(self.config.buffer_capacity_s * self.config.framerate)
         )
