@@ -20,7 +20,7 @@ class TestRecorderConfig:
         assert config.pre_roll_s == 2.0
         assert config.post_roll_s == 2.0
         assert config.max_processing_delay_s == 8.0
-        assert config.transpose == 2
+        assert config.transpose == 1
 
     def test_buffer_capacity_is_pre_roll_plus_processing_delay_cushion(self):
         config = RecorderConfig(pre_roll_s=2.0, max_processing_delay_s=8.0)

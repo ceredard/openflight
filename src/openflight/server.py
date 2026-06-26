@@ -2685,10 +2685,10 @@ def main():
     parser.add_argument(
         "--record-transpose",
         type=int,
-        default=2,
+        default=1,
         choices=[0, 1, 2, 3, -1],
         help="ffmpeg transpose value to correct for a rotated camera mount: "
-        "1=90 clockwise, 2=90 counter-clockwise (default 2). Pass -1 for no rotation.",
+        "1=90 clockwise, 2=90 counter-clockwise (default 1). Pass -1 for no rotation.",
     )
     parser.add_argument(
         "--session-location",

@@ -128,9 +128,10 @@ class RecorderConfig:
     # ffmpeg transpose value to correct for the camera being mounted rotated
     # 90 degrees (so the lens's wider FOV axis runs vertically, framing a
     # full golf swing from closer in): 1=90 clockwise, 2=90 counter-
-    # clockwise, None=no rotation. The camera was physically rotated 90
-    # degrees clockwise, which is corrected with a counter-clockwise rotate.
-    transpose: Optional[int] = 2
+    # clockwise, None=no rotation. Confirmed on hardware: this mount needs
+    # a clockwise correction (the opposite of the initial counter-clockwise
+    # guess, which came out rotated the wrong way).
+    transpose: Optional[int] = 1
 
     @property
     def buffer_capacity_s(self) -> float:
