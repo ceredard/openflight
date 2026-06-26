@@ -2683,6 +2683,14 @@ def main():
         "--record-fps", type=int, default=50, help="Shot video framerate (default 50)"
     )
     parser.add_argument(
+        "--record-transpose",
+        type=int,
+        default=2,
+        choices=[0, 1, 2, 3, -1],
+        help="ffmpeg transpose value to correct for a rotated camera mount: "
+        "1=90 clockwise, 2=90 counter-clockwise (default 2). Pass -1 for no rotation.",
+    )
+    parser.add_argument(
         "--session-location",
         "-l",
         default="range",
@@ -2988,6 +2996,7 @@ def main():
             width=args.record_width,
             height=args.record_height,
             framerate=args.record_fps,
+            transpose=None if args.record_transpose == -1 else args.record_transpose,
         )
         if init_shot_recorder(mock=args.mock, config=recorder_config):
             print(

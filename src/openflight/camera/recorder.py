@@ -34,6 +34,7 @@ def _mux_h264_to_mp4(
     framerate: int,
     trim_start_s: Optional[float] = None,
     clip_duration_s: Optional[float] = None,
+    transpose: Optional[int] = None,
 ) -> None:
     """Remux a raw H.264 elementary stream into a real MP4 container.
 
@@ -67,6 +68,12 @@ def _mux_h264_to_mp4(
     start a little later than requested but never earlier. H264Encoder is
     configured with a 1-second keyframe interval (see ShotVideoRecorder)
     specifically to keep that snap small.
+
+    transpose corrects for the camera being mounted rotated 90 degrees (see
+    RecorderConfig.transpose) by applying ffmpeg's -vf transpose filter -
+    ffmpeg's transpose values: 1=90 clockwise, 2=90 counter-clockwise. This
+    requires re-encoding (-c:v libx264) since a video filter can't be
+    combined with stream copy.
     """
     if shutil.which("ffmpeg") is None:
         raise RuntimeError(
@@ -79,7 +86,11 @@ def _mux_h264_to_mp4(
         cmd += ["-ss", str(trim_start_s)]
     if clip_duration_s:
         cmd += ["-t", str(clip_duration_s)]
-    cmd += ["-c", "copy", "-movflags", "+faststart", str(out_path)]
+    if transpose is not None:
+        cmd += ["-vf", f"transpose={transpose}", "-c:v", "libx264", "-preset", "veryfast"]
+    else:
+        cmd += ["-c", "copy"]
+    cmd += ["-movflags", "+faststart", str(out_path)]
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -113,6 +124,13 @@ class RecorderConfig:
     max_processing_delay_s: float = 8.0
 
     bitrate: int = 14_000_000
+
+    # ffmpeg transpose value to correct for the camera being mounted rotated
+    # 90 degrees (so the lens's wider FOV axis runs vertically, framing a
+    # full golf swing from closer in): 1=90 clockwise, 2=90 counter-
+    # clockwise, None=no rotation. The camera was physically rotated 90
+    # degrees clockwise, which is corrected with a counter-clockwise rotate.
+    transpose: Optional[int] = 2
 
     @property
     def buffer_capacity_s(self) -> float:
@@ -277,6 +295,7 @@ class ShotVideoRecorder:
                 framerate=self.config.framerate,
                 trim_start_s=trim_start_s,
                 clip_duration_s=clip_duration_s,
+                transpose=self.config.transpose,
             )
         finally:
             if not keep_raw:

@@ -238,6 +238,10 @@ while [[ $# -gt 0 ]]; do
             RECORD_FPS="$2"
             shift 2
             ;;
+        --record-transpose)
+            RECORD_TRANSPOSE="$2"
+            shift 2
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -383,6 +387,7 @@ if [ "$RECORD_VIDEO" = true ]; then
     [ -n "$RECORD_WIDTH" ] && SERVER_CMD="$SERVER_CMD --record-width $RECORD_WIDTH"
     [ -n "$RECORD_HEIGHT" ] && SERVER_CMD="$SERVER_CMD --record-height $RECORD_HEIGHT"
     [ -n "$RECORD_FPS" ] && SERVER_CMD="$SERVER_CMD --record-fps $RECORD_FPS"
+    [ -n "$RECORD_TRANSPOSE" ] && SERVER_CMD="$SERVER_CMD --record-transpose $RECORD_TRANSPOSE"
 fi
 
 if [ -n "$TRIGGER" ]; then

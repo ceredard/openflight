@@ -20,6 +20,7 @@ class TestRecorderConfig:
         assert config.pre_roll_s == 2.0
         assert config.post_roll_s == 2.0
         assert config.max_processing_delay_s == 8.0
+        assert config.transpose == 2
 
     def test_buffer_capacity_is_pre_roll_plus_processing_delay_cushion(self):
         config = RecorderConfig(pre_roll_s=2.0, max_processing_delay_s=8.0)
@@ -105,6 +106,41 @@ class TestMuxH264ToMp4:
         assert cmd.index("-ss") > cmd.index("-i")
         assert cmd[cmd.index("-ss") + 1] == "7.3"
         assert cmd[cmd.index("-t") + 1] == "4.0"
+
+    def test_transpose_applies_filter_and_forces_reencode(self, tmp_path, monkeypatch):
+        """A video filter can't be combined with -c copy, so passing
+        transpose must switch to a real encode (-c:v libx264)."""
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        _mux_h264_to_mp4(tmp_path / "in.h264", tmp_path / "out.mp4", framerate=50, transpose=2)
+
+        cmd = captured["cmd"]
+        assert "-vf" in cmd and cmd[cmd.index("-vf") + 1] == "transpose=2"
+        assert "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert "-c" not in cmd or cmd[cmd.index("-c") + 1] != "copy"
+
+    def test_no_transpose_keeps_stream_copy(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        _mux_h264_to_mp4(tmp_path / "in.h264", tmp_path / "out.mp4", framerate=50, transpose=None)
+
+        cmd = captured["cmd"]
+        assert "-vf" not in cmd
+        assert cmd[cmd.index("-c") + 1] == "copy"
 
     def test_raises_on_ffmpeg_failure(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
@@ -370,7 +406,7 @@ class TestShotVideoRecorderSaveClip:
         recorder = self._running_recorder()
         mux_calls = []
 
-        def fake_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None):
+        def fake_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None, transpose=None):
             mux_calls.append((raw_path, out_path, framerate))
             out_path.write_bytes(b"fake mp4 bytes")
 
@@ -389,7 +425,7 @@ class TestShotVideoRecorderSaveClip:
     def test_save_clip_cleans_up_temp_file_even_if_mux_fails(self, tmp_path, monkeypatch):
         recorder = self._running_recorder()
 
-        def failing_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None):
+        def failing_mux(raw_path, out_path, framerate, trim_start_s=None, clip_duration_s=None, transpose=None):
             raise RuntimeError("ffmpeg exploded")
 
         monkeypatch.setattr("openflight.camera.recorder._mux_h264_to_mp4", failing_mux)

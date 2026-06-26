@@ -115,6 +115,8 @@ def test_record_video_forwards_quality_flags():
         "720",
         "--record-fps",
         "30",
+        "--record-transpose",
+        "1",
     )
     command = result.stdout.strip()
 
@@ -122,6 +124,7 @@ def test_record_video_forwards_quality_flags():
     assert "--record-width 1280" in command
     assert "--record-height 720" in command
     assert "--record-fps 30" in command
+    assert "--record-transpose 1" in command
 
 
 def test_record_video_omits_unset_quality_flags():
@@ -132,6 +135,7 @@ def test_record_video_omits_unset_quality_flags():
     assert "--record-width" not in command
     assert "--record-height" not in command
     assert "--record-fps" not in command
+    assert "--record-transpose" not in command
     assert "--kld7-ball-distance 5" not in command
 
 
